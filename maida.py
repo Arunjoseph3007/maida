@@ -1,0 +1,1234 @@
+#!/usr/bin/python3
+
+import abc
+import base64
+import datetime
+import enum
+import math
+import os
+import re
+import select
+import shutil
+import signal
+import sys
+import termios
+import traceback
+import tty
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Tuple, List
+
+# TODO emojis are a problem
+# TODO better input editing (ctrl-back, del)
+
+
+def clamp(n: int, minn: int, maxn: int):
+    if n < minn:
+        return minn
+    if n > maxn:
+        return maxn
+    return n
+
+
+def ansi(effect: str):
+    def wrapper(t: str) -> str:
+        return effect + t + "\x1b[0m"
+
+    return wrapper
+
+
+def next_line(c=0, step=1):
+    while True:
+        yield c
+        c += step
+
+
+def rgb(r: int, g: int, b: int):
+    return ansi(f"\x1b[38;2;{r};{g};{b}m")
+
+
+def rgb_bg(r: int, g: int, b: int):
+    return ansi(f"\x1b[48;2;{r};{g};{b}m")
+
+
+def noop(arg):
+    return arg
+
+
+ESC = "\x1b"
+CSI = "\x1b["
+
+dim = ansi(f"{CSI}2m")
+blink = ansi(f"{CSI}5m")
+bold = ansi(f"{CSI}1m")
+red = ansi(f"{CSI}31m")
+black = ansi(f"{CSI}38;5;0m")
+pale_yellow = ansi(f"{CSI}38;5;106m")
+gray_bg = ansi(f"{CSI}37;48;5;236m")
+pale_yellow_bg = rgb(156, 196, 102)
+orange = rgb(207, 178, 101)
+
+
+class Box:
+    def __init__(self, x: int, y: int, w: int, h: int):
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+
+    def within(self, x: int, y: int):
+        return x >= self.x and x < self.x + self.w and y >= self.y and y < self.y + self.h
+
+    def clamp(self, x: int, y: int):
+        return clamp(x, self.x, self.x + self.w - 1), clamp(y, self.y, self.y + self.h - 1)
+
+    def left(self, lf: int):
+        nw = lf
+        l = Box(self.x, self.y, nw, self.h)
+        r = Box(self.x + nw, self.y, self.w - nw, self.h)
+        return l, r
+
+    def top(self, to: int):
+        nh = to
+        t = Box(self.x, self.y, self.w, nh)
+        b = Box(self.x, self.y + nh, self.w, self.h - nh)
+        return t, b
+
+    def right(self, r: int):
+        return self.left(self.w - r)
+
+    def bottom(self, b: int):
+        return self.top(self.h - b)
+
+    def leftP(self, pc: int):
+        return self.left(round(self.w * pc / 100))
+
+    def rightP(self, pc: int):
+        return self.right(round(self.w * pc / 100))
+
+    def topP(self, pc: int):
+        return self.top(round(self.h * pc / 100))
+
+    def bottomP(self, pc: int):
+        return self.bottom(round(self.h * pc / 100))
+
+    def splith(self):
+        return self.left(self.w // 2)
+
+    def splitv(self):
+        return self.top(self.h // 2)
+
+    def pad(self, p: int = 1):
+        return Box(self.x + p, self.y + p, self.w - 2 * p, self.h - 2 * p)
+
+    def at(self, x: int, y: int):
+        return self.x + x, self.y + y
+
+    def top_left(self, w: int, h: int, pad: int = 1):
+        return Box(*self.at(pad, pad), w, h)
+
+    def top_right(self, w: int, h: int, pad: int = 1):
+        return Box(*self.at(self.w - w - pad, pad), w, h)
+
+    def bottom_left(self, w: int, h: int, pad: int = 1):
+        return Box(*self.at(pad, self.h - h - pad), w, h)
+
+    def bottom_right(self, w: int, h: int, pad: int = 1):
+        return Box(*self.at(self.w - w - pad, self.h - h - pad), w, h)
+
+    def rows(self, r: int):
+        rh = self.h // r
+        boxes = []
+
+        rest = self
+        for i in range(r - 1):
+            a, rest = rest.top(rh)
+            boxes.append(a)
+        boxes.append(rest)
+        return boxes
+
+    def cols(self, c: int):
+        cw = self.w // c
+        boxes = []
+
+        rest = self
+        for i in range(c - 1):
+            a, rest = rest.left(cw)
+            boxes.append(a)
+        boxes.append(rest)
+        return boxes
+
+    def sub_box(self, x: int, y: int, w: int, h: int):
+        return Box(*self.at(x, y), w, h)
+
+    def __str__(self):
+        return f"Box(x={self.x}, y={self.y}, w={self.w}, h={self.h})"
+
+
+class TextAlign(enum.Enum):
+    LEFT = "LEFT"
+    RIGHT = "RIGHT"
+    CENTER = "CENTER"
+
+
+class MouseMode(enum.Enum):
+    NONE = "NONE"
+    CLICKS = "CLICKS"
+    ALL = "ALL"
+    CLICKS_SGR = "CLICKS_SGR"
+    ALL_SGR = "ALL_SGR"
+    SGR_PIXEL = "SGR_PIXEL"  # TODO, WIP
+
+    def tracking_code(self):
+        mappings = {
+            MouseMode.CLICKS: "\x1b[?1000h",
+            MouseMode.ALL: "\x1b[?1003h",
+            MouseMode.CLICKS_SGR: "\x1b[?1000h\x1b[?1006h",
+            MouseMode.ALL_SGR: "\x1b[?1003h\x1b[?1006h",
+            MouseMode.SGR_PIXEL: "\x1b[?1003h\x1b[?1016h",
+        }
+        return mappings.get(self, "")
+
+    def deactivate_code(self):
+        mappings = {
+            MouseMode.CLICKS_SGR: "\x1b[?1006l\x1b[?1000l",
+            MouseMode.ALL_SGR: "\x1b[?1006l\x1b[?1000l",
+            MouseMode.SGR_PIXEL: "\x1b[?1016l",
+        }
+        return mappings.get(self, "\x1b[?1000l")
+
+
+class Mouse:
+    def __init__(self):
+        self.x = 0
+        self.y = 0
+
+        self.pixel = [0, 0]
+
+        self.left_down = False
+        self.right_down = False
+        self.state = None
+
+    @property
+    def pos(self):
+        return self.x, self.y
+
+    @property
+    def down(self):
+        return self.left_down
+
+    def normal_update(self, evt: bytes):
+        self.state = evt[0]
+        self.left_down = str(evt[0]) == "32"
+        self.x = evt[1] - 32
+        self.y = evt[2] - 32
+
+    def sgr_update(self, evt: str):
+        state, col, row = evt[:-1].split(";")
+        self.state = int(state)
+        if state == "0":
+            self.left_down = evt[-1] == "M"
+        if state == "2":
+            self.right_down = evt[-1] == "M"
+        self.x = int(col)
+        self.y = int(row) - 1
+
+    def sgr_pixel_update(self, evt: str):
+        state, col, row = evt[:-1].split(";")
+        self.state = int(state)
+        if state == "0":
+            self.left_down = evt[-1] == "M"
+        if state == "2":
+            self.right_down = evt[-1] == "M"
+        self.x = int(col)
+        self.y = int(row) - 1
+
+
+class LogLevels(enum.Enum):
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARN = "WARN"
+    ERROR = "ERROR"
+
+    def get_decoration(self):
+        mappings = {
+            LogLevels.DEBUG: rgb(20, 150, 20),
+            LogLevels.INFO: rgb(80, 80, 200),
+            LogLevels.WARN: rgb(180, 180, 20),
+            LogLevels.ERROR: rgb(200, 80, 20),
+        }
+
+        return mappings.get(self, rgb(0, 255, 255))
+
+
+@dataclass
+class Log:
+    level: LogLevels
+    message: str
+
+    def format(self, log_len=100):
+        log = f"{self.message}"
+        if len(log) > log_len:
+            log = log[: log_len - 2] + ".."
+        return self.level.get_decoration()(log)
+
+
+class ANSI:
+    RE = re.compile(r"\x1b\[[0-9;]*(m|K)")
+    RESET = "\x1b[0m"
+
+    def __init__(self):
+        self.codes = []
+
+    def update(self, code: str):
+        # can be more sophisticated check for reset
+        if code == ANSI.RESET:
+            self.codes = []
+        else:
+            self.codes.append(code)
+
+    def ingest(self, text: str):
+        for code in ANSI.RE.findall(text):
+            self.update(code)
+
+    @property
+    def state_code(self):
+        return ANSI.RESET + "".join(self.codes)
+
+
+class TUI(abc.ABC):
+    MAX_LOGS = 100
+
+    def __init__(self, *, fps=1, mouse_mode=MouseMode.NONE, render_diff_only=False):
+        self.running = True
+
+        self.tty_in = open("/dev/tty", "r")
+        self.tty_out = open("/dev/tty", "w")
+
+        self.init_screen()
+        self.logs: List[Log] = []
+        self.display_diagnostics = False
+
+        fd = self.tty_in.fileno()
+        self._old_termios = termios.tcgetattr(fd)
+        tty.setraw(fd)  # to read char by char instead of buffering
+
+        self.render_diff_only = render_diff_only
+        self.fps = fps
+        self.mouse = Mouse()
+        self.mouse_mode = mouse_mode
+
+        self.screensize = (0, 0)
+
+    def query_screensize(self):
+        self.tty_out.write("\x1b[14t")
+
+    def init_screen(self):
+        self.size = shutil.get_terminal_size(fallback=(80, 24))
+        self.width = self.size.columns
+        self.height = self.size.lines
+        self.fresh_frame = True
+        self.output = [[" " for _ in range(self.width)] for _ in range(self.height)]
+        self.old_output = [[" " for _ in range(self.width)] for _ in range(self.height)]
+        self.zindex = 0
+        self.zbuffer = [[self.zindex for _ in range(self.width)] for _ in range(self.height)]
+        self.old_zbuffer = [[0 for _ in range(self.width)] for _ in range(self.height)]
+        self.box = Box(0, 0, self.width, self.height)
+        self.cursor_loc = [0, 0]
+        self.query_screensize()
+
+    def handle_resize(self, _signum, _frame):
+        self.init_screen()
+        self.wrapped_render()
+        self.print_to_screen()
+
+    def handle_exit(self, _signum, _frame):
+        self.shutdown()
+
+    def __del__(self):
+        termios.tcsetattr(self.tty_in.fileno(), termios.TCSADRAIN, self._old_termios)
+
+        self.tty_out.write("\x1b[?25h")  # show cursor
+        self.tty_out.write("\x1b[?7h")  # re-enable autowrap
+        self.tty_out.write("\x1b[?1049l")  # exit alternate screen (restores previous terminal content)
+        self.tty_out.write(self.mouse_mode.deactivate_code())  # disabling mouse tracking
+        self.tty_out.flush()
+
+        self.tty_in.close()
+        self.tty_out.close()
+
+    def withz(self, zi: int):
+        @contextmanager
+        def zcontext(tui, newz):
+            oldz = tui.zraise(newz)
+            yield
+            tui.zreset(oldz)
+
+        return zcontext(self, zi)
+
+    def shutdown(self):
+        self.running = False
+
+    def cwrite(self, cx: int, cy: int, tx: str):
+        """Canvas Write
+        takes into account zbuffer
+        """
+        if self.zindex >= self.zbuffer[cy][cx]:
+            self.output[cy][cx] = tx
+            self.zbuffer[cy][cx] = self.zindex
+
+    def zraise(self, zi: int):
+        old = self.zindex
+        self.zindex = zi
+        return old
+
+    def zreset(self, zi=0):
+        self.zindex = zi
+
+    def error_logging(self, title="untitled"):
+        @contextmanager
+        def error_logging(tui, group):
+            try:
+                yield
+            except Exception as e:
+                _, _, exc_tb = sys.exc_info()
+                tb_info = traceback.extract_tb(exc_tb, 10)
+                tb_info.reverse()
+
+                for i, tb in enumerate(tb_info):
+                    padding = " " + "  " * i
+                    tui.log(LogLevels.ERROR, f"[{group}]{padding}{tb.name}:{tb.lineno}: {repr(e)}")
+
+        return error_logging(self, title)
+
+    def wrapped_render(self):
+        with self.error_logging("render"):
+            diag_box = self.box.topP(50)[0]
+            if self.display_diagnostics:
+                with self.withz(10000):
+                    self.render_diagnostics(diag_box)
+
+            self.render()
+
+    def mainLoop(self):
+        self.tty_out.write("\x1b[?1049h")  # enter alternate screen
+        self.tty_out.write(self.mouse_mode.tracking_code())  # enable mouse tracking
+        self.tty_out.flush()
+        signal.signal(signal.SIGWINCH, self.handle_resize)
+        signal.signal(signal.SIGINT, self.handle_exit)
+
+        self.wrapped_render()
+        self.print_to_screen()
+
+        while self.running:
+            self.clean_out()
+            ch = self.get_char(timeout=1 / self.fps)
+            if ch:
+                if ch == "\x04":
+                    self.display_diagnostics = not self.display_diagnostics
+                self.on_input(ch)
+
+            self.wrapped_render()
+            self.print_to_screen()
+
+    def clean_out(self):
+        self.zindex = 0
+        self.old_zbuffer = self.zbuffer
+        self.zbuffer = [[self.zindex for _ in range(self.width)] for _ in range(self.height)]
+        self.output = [[" " for _ in range(self.width)] for _ in range(self.height)]
+
+    @abc.abstractmethod
+    def render(self):
+        raise "render Not implemented"
+
+    @abc.abstractmethod
+    def on_input(self, ch: str):
+        raise "update Not implemented"
+
+    def beep(self):
+        sys.stdout.write("\a")
+        sys.stdout.flush()
+
+    def draw_border(self, x: int, y: int, w: int, h: int, *, effect=dim):
+        r = x + w - 1
+        b = y + h - 1
+
+        for i in range(w):
+            self.cwrite(x + i, y, effect("─"))
+            self.cwrite(x + i, b, effect("─"))
+
+        for i in range(h):
+            self.cwrite(x, y + i, effect("│"))
+            self.cwrite(r, y + i, effect("│"))
+
+        self.cwrite(x, y, effect("╭"))
+        self.cwrite(r, y, effect("╮"))
+        self.cwrite(x, b, effect("╰"))
+        self.cwrite(r, b, effect("╯"))
+
+    def clean_box(self, box: Box):
+        for y in range(box.y, box.y + box.h):
+            for x in range(box.x, box.x + box.w):
+                self.cwrite(x, y, " ")
+
+    def draw_box(self, box: Box, *, effect=dim):
+        self.draw_border(box.x, box.y, box.w, box.h, effect=effect)
+
+    def add_line(self, text: str, box: Box, row: int, *, align=TextAlign.LEFT, effect=None):
+        if not text:
+            return
+
+        lines: List[str] = []
+        while len(text) > 0:
+            lines.append(text[: box.w - 2])
+            text = text[box.w - 2 :].strip()
+
+        tw = box.w - 2
+        match align:
+            case TextAlign.LEFT:
+                pass
+            case TextAlign.RIGHT:
+                lines[-1] = lines[-1].rjust(tw)
+            case TextAlign.CENTER:
+                lines[-1] = lines[-1].center(tw)
+
+        text = "\n".join(lines)
+
+        if effect:
+            text = effect(text)
+
+        self.blit_text_to_box(text, box, 1, row)
+
+    def blit_text_to_box(
+        self,
+        text: str,
+        box: Box,
+        bxo: int,
+        byo: int,
+        *,
+        scrollx: int = 0,
+        scrolly: int = 0,
+        wrap: bool = False,
+    ):
+        assert not wrap, "Wrap is not supported yet"
+        xo, yo = box.at(bxo, byo)
+
+        lines = text.splitlines()
+
+        ansi = ANSI()
+        ansi.ingest("\n".join(lines[:scrolly]))
+
+        lines = lines[scrolly : scrolly + box.h + 1]
+        for y, line in enumerate(lines):
+            x = 0
+            i = 0
+            prefix = ansi.state_code
+            while i < len(line):
+                m = ANSI.RE.match(line, i)
+                row = y + yo
+                col = x + xo - scrollx
+                if m:
+                    ansi.update(m.group())
+                    prefix = ansi.state_code
+                    i = m.end()
+                else:
+                    if (
+                        row > 0
+                        and row < self.height - 1
+                        and col >= box.x + bxo
+                        and col < self.width - 1
+                        and box.within(col, row)
+                    ):
+                        self.cwrite(col, row, prefix + line[i])
+                        prefix = ""
+                    x += 1
+                    i += 1
+
+            if (
+                row > 0
+                and row < self.height - 1
+                and col >= box.x + bxo
+                and col < self.width - 1
+                and box.within(col, row)
+                and self.zindex >= self.zbuffer[row][col]
+            ):
+                # TODO this might need some more work and precision
+                self.output[row][col] += "\x1b[0m"
+
+    def render_diagnostics(self, box: Box):
+        self.clean_box(box)
+        self.draw_box(box, effect=pale_yellow)
+
+        log_box, settings_box = box.pad(1).leftP(75)
+        self.draw_box(log_box)
+        self.draw_box(settings_box)
+
+        self.blit_text_to_box(pale_yellow(" Log "), log_box, 1, 0)
+        self.blit_text_to_box(pale_yellow(" Settings "), settings_box, 1, 0)
+
+        log_len = log_box.w - 2
+        for i, log in enumerate(self.logs[-(log_box.h - 2) :]):
+            log_line_box = log_box.sub_box(0, i + 1, log_box.w, 1)
+
+            self.blit_text_to_box(log.format(log_len), log_line_box, 1, 0)
+
+        green = rgb(135, 217, 98)
+        ln = next_line(1)
+        self.blit_text_to_box(f"{green('Mouse Pos  ')} : {self.mouse.pos}          ".strip(), settings_box, 1, next(ln))
+        self.blit_text_to_box(f"{green('Mouse State')} : {self.mouse.state}        ".strip(), settings_box, 1, next(ln))
+        self.blit_text_to_box(f"{green('Cursor Pos ')} : {self.cursor_loc}         ".strip(), settings_box, 1, next(ln))
+        self.blit_text_to_box(f"{green('Screen Size')} : {self.width}x{self.height}".strip(), settings_box, 1, next(ln))
+        self.blit_text_to_box(f"{green('Tracking   ')} : {self.mouse_mode}         ".strip(), settings_box, 1, next(ln))
+        self.blit_text_to_box(f"{green('FPS        ')} : {self.fps}                ".strip(), settings_box, 1, next(ln))
+        self.blit_text_to_box(f"{green('Screen size')} : {self.screensize}         ".strip(), settings_box, 1, next(ln))
+        if self.render_diff_only:
+            self.blit_text_to_box(green("Rendering Diffs only"), settings_box, 1, next(ln))
+        else:
+            self.blit_text_to_box(green("Rendering Full Frames"), settings_box, 1, next(ln))
+
+    def get_diffs(self):
+        @dataclass
+        class Diff:
+            line: int
+            start: int
+            end: int
+
+        diffs: List[Diff] = []
+
+        for y in range(self.height):
+            x = 0
+            while x < self.width:
+                if self.old_output[y][x] != self.output[y][x]:
+                    start = x
+                    while x < self.width and self.old_output[y][x] != self.output[y][x]:
+                        x += 1
+                    end = x
+                    diffs.append(Diff(line=y, start=start, end=end))
+                x += 1
+
+        if diffs:
+            self.log(LogLevels.DEBUG, f"diffs: {len(diffs)}, {diffs[0]}, {diffs[-1]}")
+        else:
+            self.log(LogLevels.DEBUG, f"no diffs")
+        return diffs
+
+    def print_to_screen(self):
+        self.tty_out.write("\x1b[?7l")  # disable autowrap
+        self.tty_out.write("\x1b[?25l")  # hide cursor during draw
+
+        if self.render_diff_only and not self.fresh_frame:
+            self.print_out_diffs()
+        else:
+            self.print_out_full()
+            if self.fresh_frame:
+                self.fresh_frame = False
+
+        self.tty_out.write("\x1b[?25h")  # show cursor
+        self.tty_out.write("\x1b[?7h")  # re-enable autowrap
+
+        cx, cy = self.cursor_loc
+        self.tty_out.write(f"\x1b[{cy+1};{cx+1}H")  # align cursor
+        self.tty_out.flush()
+
+    # NOTE diff printing has problems, it doesnt follow ansi coloring anythin written is just white
+    # no problem if its pure white
+    def print_out_diffs(self):
+        diffs = self.get_diffs()
+        self.old_output = [x.copy() for x in self.output]
+
+        for diff in diffs:
+            self.tty_out.write(f"\x1b[{diff.line + 1};{diff.start + 1}H")  # move cursor to absolute position
+            self.tty_out.write("".join(self.output[diff.line][diff.start : diff.end]))
+
+    def print_out_full(self):
+        for i, row in enumerate(self.output):
+            self.tty_out.write(f"\x1b[{i + 1};1H")  # move cursor to absolute position
+            self.tty_out.write("".join(row))
+
+    def get_char(self, *, timeout=2):
+        """Read a single raw keypress from /dev/tty, handling multi-byte escape sequences"""
+        fd = self.tty_in.fileno()
+        wait_dur = min(0.1, 0.5 / self.fps)
+        cycles = max(math.floor(timeout / wait_dur), 1)
+        for _ in range(cycles):
+            if not self.running:
+                break
+            if not select.select([fd], [], [], wait_dur)[0]:
+                continue
+
+            ch = os.read(fd, 1).decode()
+            # simple character
+            if ch != "\x1b":
+                return ch
+
+            # escape codes
+            if select.select([fd], [], [], wait_dur / 2)[0]:
+                ch += os.read(fd, 1).decode()
+                if ch == "\x1b[" and select.select([fd], [], [], wait_dur / 2)[0]:
+                    ch += os.read(fd, 1).decode()
+
+                    # Mouse click event
+                    if ch == "\x1b[M":
+                        pos = os.read(fd, 3)
+                        self.mouse.normal_update(pos)
+                        return None
+
+                    # SGR tracking
+                    elif ch == "\x1b[<":
+                        pos_details = os.read(fd, 1).decode()
+                        while pos_details[-1].lower() != "m":
+                            pos_details += os.read(fd, 1).decode()
+
+                        if self.mouse_mode == MouseMode.ALL_SGR or self.mouse_mode == MouseMode.CLICKS_SGR:
+                            self.mouse.sgr_update(pos_details)
+                        if self.mouse_mode == MouseMode.SGR_PIXEL:
+                            self.log(LogLevels.DEBUG, pos_details.encode())
+                            self.mouse.sgr_pixel_update(pos_details)
+                        return None
+
+                    # screen size in pixels
+                    elif ch == "\x1b[4":
+                        size_details = os.read(fd, 1).decode()
+                        while size_details[-1] != "t":
+                            size_details += os.read(fd, 1).decode()
+
+                        _, height, width = size_details[:-1].split(";")
+                        self.screensize = (int(width), int(height))
+                        return None
+            return ch
+        return None
+
+    # TODO this is hack (although works nicely, to prevent event propogration to lower components)
+    # eventually we will need a better way of hendling this
+    def oldz_match(self):
+        mx, my = self.mouse.pos
+        return self.old_zbuffer[my][mx] <= self.zindex
+
+    def hovering(self, box: Box):
+        return box.within(*self.mouse.pos) and self.oldz_match()
+
+    def clicking(self, box: Box):
+        return self.mouse.down and box.within(*self.mouse.pos) and self.oldz_match()
+
+    def right_clicking(self, box: Box):
+        return self.mouse.right_down and box.within(*self.mouse.pos) and self.oldz_match()
+
+    def get_screen_pos(self, cx, cy):
+        cw, ch = self.width, self.height
+        sw, sh = self.screensize
+        if cw == 0 or ch == 0:
+            return 0, 0
+        return (sw / cw) * (cx + 0.5), (sh / ch) * (cy + 0.5)
+
+    def get_char_pos(self, sx, sy):
+        cw, ch = self.width, self.height
+        sw, sh = self.screensize
+        if sw == 0 or sh == 0:
+            return 0, 0
+        return int((cw / sw) * sx), int((ch / sh) * sy)
+
+    def get_mouse_screen_pos(self):
+        return self.get_screen_pos(*self.mouse.pos)
+
+    def log(self, level: LogLevels, msg: str):
+        log = Log(level=level, message=str(msg))
+        self.logs = self.logs[-self.MAX_LOGS :] + [log]
+
+
+fonts = {
+    "ANSI Shadow": """
+ █████╗     ██╗ ██████╗ ██████╗ ██╗  ██╗███████╗ ██████╗███████╗ █████╗  █████╗          
+██╔═███╗   ███║ ╚════██╗╚════██╗██║  ██║██╔════╝██╔════╝╚════██║██╔══██╗██╔══██╗   ██╗   
+██║█╔██║   ╚██║  █████╔╝ █████╔╝███████║███████╗███████╗    ██╔╝╚█████╔╝╚██████║   ╚═╝   
+███╔╝██║    ██║ ██╔═══╝  ╚═══██╗╚════██║╚════██║██╔═══██╗  ██╔╝ ██╔══██╗ ╚═══██║   ██╗   
+╚█████╔╝    ██║ ███████╗██████╔╝     ██║███████║╚██████╔╝  ██║  ╚█████╔╝ █████╔╝   ╚═╝   
+ ╚════╝     ╚═╝ ╚══════╝╚═════╝      ╚═╝╚══════╝ ╚═════╝   ╚═╝   ╚════╝  ╚════╝          
+                                                                            """,
+    "ANSI Regular": """
+ ██████     ██  ██████  ██████  ██   ██ ███████  ██████ ███████  █████   █████           
+██  ████   ███       ██      ██ ██   ██ ██      ██           ██ ██   ██ ██   ██    ██    
+██ ██ ██    ██   █████   █████  ███████ ███████ ███████     ██   █████   ██████          
+████  ██    ██  ██           ██      ██      ██ ██    ██   ██   ██   ██      ██    ██    
+ ██████     ██  ███████ ██████       ██ ███████  ██████    ██    █████   █████           
+                                                                                 """,
+    "Hash": """                                                                                                              
+  .####.    .###     . ####:   . ####:       ###   #######      ###:   ########   :####:    :####.            
+  ######    ####     #######:  #######:     :###   #######    ######   ########  :######:  :######            
+ :##  ##:   #:##     #:.   ##  #:.   ##    .####   ##        :##. .#         #   ##    ##  ##    #            
+ ##:  :##     ##           ##        ##    ##.##   ##        ##:            ##.  ##    ##  ##    ##           
+ ##    ##     ##          :#         ##   :#: ##   ##### .   ##:###:        ##   ##    ##  ##    ##     ##    
+ ## ## ##     ##          ##     #####   .##  ##   #######.  #######:      ##.    ######   ##    ##     ##    
+ ## ## ##     ##        .##:     #####.  ##   ##   #:  .###  ##    ##     :##    .######.  :#######     ##    
+ ##    ##     ##       .##:          ##  ########        ##  ##    ##     ##:    ##    ##   :###:##           
+ ##:  :##     ##      :##:           ##  ########        ##  ##    ##    :##     ##    ##       :##           
+ :##  ##:     ##     :##:      #:    ##       ##   #:  .###   #    ##    ##:     ##    ##   #. .##:     ##    
+  ######   ########  ########  #######:       ##   #######.   ######:   :##      :######:   ######      ##    
+  .####.   ########  ########  :#####:        ##   :#### .    .####:    ##:       :####:    :###        ##    
+                                                                                                              """,
+}
+
+
+def block_font(t: str, font):
+    index = clamp(ord(t) - ord("0"), 0, 10)
+    f = fonts[font]
+    lines = f.splitlines()
+    cwidth = len(lines[1]) // 11
+    char_str = [l[index * cwidth : (index + 1) * cwidth] for l in lines[1:-1]]
+
+    return "\n".join(char_str)
+
+
+SELECT_OPEN = None
+
+
+def select_wg(tui: TUI, box: Box, title: str, selected: str, options: List[str], *, on_select=None) -> str:
+    global SELECT_OPEN
+    accent = rgb(177, 90, 196)
+
+    with tui.withz(10):
+        tui.clean_box(box)
+        tui.draw_box(box, effect=accent)
+        tui.add_line(f"{str(title)} >", box, 1, align=TextAlign.CENTER, effect=accent)
+
+        if tui.clicking(box):
+            if SELECT_OPEN == title:
+                SELECT_OPEN = None
+            else:
+                SELECT_OPEN = title
+
+        if SELECT_OPEN == title:
+            content_box = Box(box.x, box.y + box.h, box.w, len(options) + 2)
+            tui.clean_box(content_box)
+            tui.draw_box(content_box)
+
+            rest = content_box.top(1)[1]
+            for i, opt in enumerate(options):
+                a, rest = rest.top(1)
+                if tui.clicking(a):
+                    SELECT_OPEN = None
+                    if on_select:
+                        on_select(opt)
+                    return opt
+                if tui.hovering(a):
+                    tui.add_line(opt, content_box, i + 1, effect=gray_bg)
+                else:
+                    tui.add_line(opt, content_box, i + 1)
+
+        return selected
+
+
+def write(text: str, cursor: int, ch: str) -> Tuple[str, int, bool]:
+    handled = True
+    if ch == "\x7f":  # Backspace
+        if cursor > 0:
+            text = text[: cursor - 1] + text[cursor:]
+            cursor -= 1
+    elif ch == "\x1b[C":  # right arrow
+        if cursor < len(text):
+            cursor += 1
+    elif ch == "\x1b[D":  # left arrow
+        if cursor > 0:
+            cursor -= 1
+    elif ch.isprintable():
+        text = text[:cursor] + ch + text[cursor:]
+        cursor += 1
+    else:
+        handled = False
+    return text, cursor, handled
+
+
+class SelectWG:
+    def __init__(self, title: str, options: List[str], on_select):
+        super().__init__()
+        self.title = title
+        self.options = options
+        self.on_select = on_select
+
+        self.accent = rgb(255, 0, 255)
+
+    def title_tr(self, text):
+        return gray_bg(self.accent(text))
+
+    def render(self, box, tui):
+        title_box, rest = box.top(3)
+        tui.clean_box(title_box)
+        tui.draw_box(title_box, effect=self.accent)
+
+        hovering = tui.hovering(box)
+        tui.add_line(f"{self.title} >", title_box, 1, align=TextAlign.CENTER, effect=self.accent)
+
+        if hovering:
+            content_box = rest.top(len(self.options) + 2)[0]
+            tui.draw_box(content_box)
+
+            rest = content_box.top(1)[1]
+            for i, opt in enumerate(self.options):
+                a, rest = rest.top(1)
+                if tui.clicking(a):
+                    self.on_select(opt)
+                if tui.hovering(a):
+                    tui.add_line(opt, content_box, i + 1, effect=gray_bg)
+                else:
+                    tui.add_line(opt, content_box, i + 1)
+
+
+class ClockWG:
+    def __init__(self):
+        super().__init__()
+        self.font = list(fonts.keys())[0]
+        self.on_font_change(self.font)
+
+    def on_font_change(self, opt):
+        self.font = opt
+
+        lines = fonts[self.font].splitlines()
+        self.cwidth = len(lines[1]) // 11
+        self.cheight = len(lines) - 2
+
+    def render(self, box, tui):
+        self.font = select_wg(
+            tui, box.top_right(15, 3), "Font", self.font, list(fonts.keys()), on_select=self.on_font_change
+        )
+
+        clicking = tui.clicking(box)
+        hovering = tui.hovering(box)
+
+        col = dim
+        if hovering:
+            col = red
+        if clicking:
+            col = pale_yellow
+
+        tui.draw_box(box, effect=col)
+        date_str = datetime.datetime.now().strftime("%H:%M:%S")
+
+        total_width = len(date_str) * self.cwidth
+        xpad = (box.w - total_width) // 2
+        ypad = (box.h - self.cheight) // 2
+        for i, c in enumerate(date_str):
+            tui.blit_text_to_box(block_font(c, self.font), box, i * self.cwidth + xpad, ypad)
+
+
+class TUIClock(TUI):
+    def __init__(self):
+        super().__init__(mouse_mode=MouseMode.ALL_SGR)
+
+        self.clock = ClockWG()
+
+    def on_input(self, ch):
+        if ch == "q":
+            self.shutdown()
+
+    def on_font_change(self, opt):
+        self.log(LogLevels.INFO, f"Font changed to {opt}")
+
+    def render(self):
+        b = self.box
+        self.draw_box(b)
+
+        b = b.pad(1)
+        self.draw_box(b)
+
+        b, c = b.leftP(25)
+        self.clock.render(c, self)
+
+        l = "Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, type specimen and bookmark."
+        self.draw_box(b)
+        self.add_line(l, b, 1, align=TextAlign.LEFT, effect=red)
+        self.add_line(l, b, 9, align=TextAlign.CENTER, effect=pale_yellow)
+        self.add_line(l, b, 16, align=TextAlign.RIGHT, effect=rgb_bg(104, 161, 212))
+
+
+class DrawModes(enum.Enum):
+    DRAW = "DRAW"
+    CIRCLE = "CIRCLE"
+    SQUARE = "SQUARE"
+
+
+class TUIDraw(TUI):
+    def __init__(self, *, fps=1):
+        super().__init__(fps=fps, mouse_mode=MouseMode.ALL_SGR)
+
+        self.canvas = [[]]
+        self.preview = [[]]
+
+        self.ink_mapping = {
+            "noop": noop,
+            "pale_yellow": pale_yellow,
+            "black": black,
+            "red": red,
+        }
+        self.ink_options = list(self.ink_mapping.keys())
+        self.pen_options = ["█", "*", "·", "#"]
+        self.mod_options = [dm.value for dm in DrawModes]
+        self.ink = self.ink_options[0]
+        self.pen = self.pen_options[0]
+        self.mod = self.mod_options[0]
+
+        self.sq_start = None
+        self.circle_c = None
+
+        self.log(LogLevels.DEBUG, "This should be a debug log")
+        self.log(LogLevels.INFO, "This should be a info log")
+        self.log(LogLevels.WARN, "This should be a warn log")
+        self.log(LogLevels.ERROR, "This should be a error log")
+
+    def on_input(self, ch):
+        if ch == "\x1b":
+            self.sq_start = None
+            self.circle_c = None
+        if ch == "q":
+            self.shutdown()
+        if ch == "b":
+            self.beep()
+        if ch == "c":
+            self.clean_canvas()
+        if ch == "r":
+            self.render_diff_only = not self.render_diff_only
+        if ch == "p":
+            try:
+                lines = ["".join(row) for row in self.canvas]
+                canvas_text = "\n".join(lines).encode()
+                encoded = base64.b64encode(canvas_text).decode()
+                sys.stdout.write(f"\x1b]52;c;{encoded}\007")
+                sys.stdout.flush()
+            except Exception as e:
+                self.log(LogLevels.ERROR, f"Err: {repr(e)}")
+
+    def get_canvas_size(self):
+        return len(self.canvas[0]), len(self.canvas)
+
+    def clean_canvas(self):
+        w, h = self.get_canvas_size()
+        self.canvas = [[" " for _ in range(w)] for _ in range(h)]
+        self.preview = [[" " for _ in range(w)] for _ in range(h)]
+
+    def resize_canvas_if_needed(self, w, h):
+        cw, ch = self.get_canvas_size()
+
+        if cw != w or ch != h:
+            self.canvas = [[" " for _ in range(w)] for _ in range(h)]
+            self.preview = [[" " for _ in range(w)] for _ in range(h)]
+
+    def get_paint(self):
+        return self.ink_mapping[self.ink](self.pen)
+
+    def draw_square(self, a, b, canvas=None):
+        if not canvas:
+            canvas = self.canvas
+        ax, ay = a
+        bx, by = b
+
+        sx = min(ax, bx)
+        sy = min(ay, by)
+        ex = max(ax, bx)
+        ey = max(ay, by)
+
+        for i in range(sx, ex + 1):
+            canvas[sy][i] = self.get_paint()
+            canvas[ey][i] = self.get_paint()
+        for i in range(sy, ey + 1):
+            canvas[i][sx] = self.get_paint()
+            canvas[i][ex] = self.get_paint()
+
+    def draw_circle(self, center, on_perimeter, canvas=None):
+        if not canvas:
+            canvas = self.canvas
+
+        csx, csy = self.get_screen_pos(*center)
+        opx, opy = self.get_screen_pos(*on_perimeter)
+
+        radius_sq = (csx - opx) ** 2 + (csy - opy) ** 2
+        radius = math.sqrt(radius_sq)
+
+        sx = csx - radius
+        sy = csy - radius
+        ex = csx + radius
+        ey = csy + radius
+
+        minx, miny = self.get_char_pos(sx, sy)
+        maxx, maxy = self.get_char_pos(ex, ey)
+
+        canv_box = Box(0, 0, len(canvas[0]), len(canvas))
+        threshold = max(radius_sq / 10, 500)
+        for x in range(minx - 5, maxx + 5):
+            for y in range(miny - 1, maxy + 2):
+                if not canv_box.within(x, y):
+                    continue
+                psx, psy = self.get_screen_pos(x, y)
+
+                dist_sq = (psx - csx) ** 2 + (psy - csy) ** 2
+                if abs(dist_sq - radius_sq) < threshold:
+                    canvas[y][x] = self.get_paint()
+
+    def get_combined_canvas(self):
+        w, h = self.get_canvas_size()
+        canvas = [[" " for _ in range(w)] for _ in range(h)]
+
+        for y in range(h):
+            for x in range(w):
+                if self.preview[y][x] != " ":
+                    canvas[y][x] = self.preview[y][x]
+                elif self.canvas[y][x] != " ":
+                    canvas[y][x] = self.canvas[y][x]
+
+        lines = ["".join(row) for row in canvas]
+        canvas_text = "\n".join(lines)
+        return canvas_text
+
+    def render(self):
+        head, canvas = self.box.top(3)
+        self.resize_canvas_if_needed(canvas.w - 2, canvas.h - 2)
+
+        # Render Heading
+        head, ink_sel_box = head.right(18)
+        head, pen_sel_box = head.right(18)
+        head, mod_sel_box = head.right(18)
+
+        self.pen = select_wg(self, pen_sel_box, "Pen", self.pen, self.pen_options)
+        self.ink = select_wg(self, ink_sel_box, "Ink", self.ink, self.ink_options)
+        self.mod = select_wg(self, mod_sel_box, "Mod", self.mod, self.mod_options)
+
+        self.draw_box(head)
+        self.blit_text_to_box(bold(orange("< ASCI ART School >")), head, 1, 1)
+
+        # rended canvas
+        self.draw_box(canvas, effect=pale_yellow)
+        self.blit_text_to_box(pale_yellow(" Canvas "), canvas, 1, 0)
+
+        # clean preview
+        w, h = self.get_canvas_size()
+        self.preview = [[" " for _ in range(w)] for _ in range(h)]
+
+        if self.hovering(canvas.pad(1)):
+            mx, my = self.mouse.pos
+            cx = mx - canvas.x - 2
+            cy = my - canvas.y - 1
+            if self.mouse.down:
+                match self.mod:
+                    case DrawModes.DRAW.value:
+                        self.canvas[cy][cx] = self.get_paint()
+                    case DrawModes.SQUARE.value:
+                        if self.sq_start:
+                            self.draw_square((cx, cy), self.sq_start)
+                            self.sq_start = None
+                        else:
+                            self.sq_start = (cx, cy)
+                    case DrawModes.CIRCLE.value:
+                        if self.circle_c:
+                            self.draw_circle(self.circle_c, (cx, cy))
+                            self.circle_c = None
+                        else:
+                            self.circle_c = (cx, cy)
+            elif self.mouse.right_down:
+                self.canvas[cy][cx] = " "
+
+            # Render preview
+            if self.sq_start:
+                self.draw_square((cx, cy), self.sq_start, self.preview)
+            elif self.circle_c:
+                self.draw_circle(self.circle_c, (cx, cy), self.preview)
+
+        canvas_text = self.get_combined_canvas()
+        self.blit_text_to_box(canvas_text, canvas, 1, 1)
+
+
+def get_ansi_text():
+    text = f"""hey
+    {noop('Lorem')} Ipsum {pale_yellow('''is simply dummy text 
+    of the printing and typesetting industry.
+    Lorem Ipsum has been the industry's
+    standard dummy text ever since the 1500s,''')}
+    type specimen and bookmark.
+    Lorem {red('Ipsum')} is simply dummy text 
+    of the printing and typesetting industry.
+    Lorem Ipsum has been the industry's
+    standard dummy text ever since the 1500s,
+    type specimen and bookmark.
+    Lorem Ipsum is simply dummy text 
+    of the printing and typesetting industry.
+    Lorem Ipsum has been the industry's
+    standard dummy text ever since the 1500s,
+    type specimen and bookmark.
+    Lorem Ipsum is simply dummy text 
+    of the printing and typesetting industry.
+    Lorem Ipsum has been the industry's
+    standard dummy text ever since the 1500s,
+    type specimen and bookmark.
+    Lorem Ipsum is simply dummy text 
+    of the printing and typesetting industry.
+    Lorem Ipsum has been the industry's
+    standard dummy text ever since the 1500s,
+    type specimen and bookmark.
+    Lorem Ipsum is simply dummy text 
+    of the printing and typesetting industry.
+    Lorem Ipsum has been the industry's
+    standard dummy text ever since the 1500s,
+    type specimen and bookmark.
+    Lorem Ipsum is simply dummy text 
+    of the printing and typesetting industry.
+    Lorem Ipsum has been the industry's
+    standard dummy text ever since the 1500s,
+    type specimen and bookmark.
+    Lorem Ipsum is simply dummy text 
+    of the printing and typesetting industry.
+    Lorem Ipsum has been the industry's
+    standard dummy text ever since the 1500s,
+    type specimen and bookmark.
+    """
+    text = dim(pale_yellow(text))
+
+    return "\n".join([t.strip() for t in text.splitlines()])
+
+
+class TUIAnsi(TUI):
+    def __init__(self, *, fps=1):
+        super().__init__(fps=fps, mouse_mode=MouseMode.NONE)
+
+        self.scroll = [0, 0]
+
+    def on_input(self, ch):
+        if ch == "q":
+            self.shutdown(2)
+        if ch == "s":
+            self.scroll[1] += 1
+        if ch == "w" and self.scroll[1] > 0:
+            self.scroll[1] -= 1
+        if ch == "d":
+            self.scroll[0] += 1
+        if ch == "a" and self.scroll[0] > 0:
+            self.scroll[0] -= 1
+
+    def render(self):
+        text = get_ansi_text()
+        self.draw_box(self.box)
+
+        b = self.box.pad(2)
+        self.draw_box(b)
+
+        self.blit_text_to_box(
+            text,
+            b,
+            1,
+            1,
+            scrollx=self.scroll[0],
+            scrolly=self.scroll[1],
+        )
+
+
+if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        print(f"Usage: {sys.argv[0]} app")
+        exit(1)
+
+    if sys.argv[1] == "clock":
+        TUIClock().mainLoop()
+    if sys.argv[1] == "draw":
+        TUIDraw().mainLoop()
+    if sys.argv[1] == "ansi":
+        TUIAnsi().mainLoop()
+    if sys.argv[1] == "ansi_print":
+        print(get_ansi_text())
+    else:
+        print(f"Unknown app: {sys.argv[1]}")
+        exit(2)
