@@ -160,6 +160,12 @@ class Box:
     def sub_box(self, x: int, y: int, w: int, h: int):
         return Box(*self.at(x, y), w, h)
 
+    def centered(self, w: int, h: int):
+        return Box(self.x + (self.w - w) // 2, self.y + (self.h - h) // 2, w, h)
+
+    def copy(self):
+        return Box(self.x, self.y, self.w, self.h)
+
     def __str__(self):
         return f"Box(x={self.x}, y={self.y}, w={self.w}, h={self.h})"
 
@@ -295,6 +301,80 @@ class ANSI:
         return ANSI.RESET + "".join(self.codes)
 
 
+class KeyEvent:
+    def __init__(self, key: str, *, ctrl=False, alt=False):
+        self.key = key
+        self.ctrl = ctrl
+        self.alt = alt
+
+    def __str__(self):
+        result = f"Key('{self.key}'"
+        if self.ctrl:
+            result += " + CTRL"
+        if self.alt:
+            result += " + ALT"
+        result += ")"
+        return result
+
+    def __eq__(self, value):
+        if type(value) == str:
+            ke = KeyEvent.init(value)
+            if not ke:
+                raise Exception(f"Coudlnt decode {value}")
+            return self == ke
+
+        if type(value) == type(self):
+            return self.key == value.key and self.alt == value.alt and self.ctrl == value.ctrl
+
+        raise Exception(f"Cannot eq compare {type(value)}, only supports str and {type(self)}")
+
+    def __add__(self, value) -> KeyEvent:
+        if type(value) == str:
+            ke = KeyEvent.init(value)
+            if not ke:
+                raise Exception(f"Coudlnt decode {value}")
+            return self + ke
+
+        if type(value) == type(self):
+            return KeyEvent(
+                key=self.key or value.key,
+                ctrl=self.ctrl or value.ctrl,
+                alt=self.alt or value.alt,
+            )
+
+        raise Exception(f"Cannot add {type(value)}, only supports str and {type(self)}")
+
+    @staticmethod
+    def init(key: str) -> KeyEvent | None:
+        if len(key) > 2:
+            return None
+
+        # alt key checking
+        if len(key) == 2:
+            if key[0] == ESC:
+                evt = KeyEvent.init(key[1])
+                if not evt:
+                    return None
+                evt.alt = True
+                return evt
+            else:
+                return None
+
+        if key.isprintable():
+            return KeyEvent(key)
+
+        k = ord(key)
+        ch = chr(k + ord("a") - 1)
+        if ch.isprintable():
+            return KeyEvent(ch, ctrl=True)
+
+        return None
+
+
+ALT = KeyEvent(None, alt=True)
+CTRL = KeyEvent(None, ctrl=True)
+
+
 class TUI(abc.ABC):
     MAX_LOGS = 100
 
@@ -402,7 +482,7 @@ class TUI(abc.ABC):
 
                 for i, tb in enumerate(tb_info):
                     padding = " " + "  " * i
-                    tui.log(LogLevels.ERROR, f"[{group}]{padding}{tb.name}:{tb.lineno}: {repr(e)}")
+                    tui.log(LogLevels.ERROR, f"[{group}]{padding}{tb.filename}:{tb.name}:{tb.lineno}: {repr(e)}")
 
         return error_logging(self, title)
 
@@ -434,9 +514,14 @@ class TUI(abc.ABC):
 
             ch = self.get_char(timeout=1 / self.fps)
             if ch:
-                if ch == "\x04":
+                if CTRL + "d" == ch:
                     self.display_diagnostics = not self.display_diagnostics
-                self.on_input(ch)
+
+                ke = KeyEvent.init(ch)
+                if ke:
+                    self.on_input(ke)
+                else:
+                    self.on_input(ch)
 
                 with self.error_logging("loop"):
                     for w in self.widgets:
@@ -453,7 +538,7 @@ class TUI(abc.ABC):
         raise "render Not implemented"
 
     @abc.abstractmethod
-    def on_input(self, ch: str):
+    def on_input(self, ch: str | KeyEvent):
         raise "update Not implemented"
 
     def beep(self):
@@ -786,7 +871,6 @@ def select_wg(tui: TUI, box: Box, title: str, selected: str, options: List[str],
 
 
 class Widget(abc.ABC):
-
     @abc.abstractmethod
     def render(self, tui: TUI, box: Box):
         pass
@@ -796,7 +880,7 @@ class Widget(abc.ABC):
         pass
 
 
-class InputWG:
+class InputWG(Widget):
     def __init__(self, title: str):
         self.focused = False
         self.curs = 0
@@ -851,3 +935,40 @@ def write(text: str, cursor: int, ch: str) -> Tuple[str, int, bool]:
     else:
         handled = False
     return text, cursor, handled
+
+
+class SelectWG(Widget):
+    def __init__(self, title: str, options: List[str], on_select):
+        self.title = title
+        self.options = options
+        self.on_select = on_select
+
+        self.accent = rgb(255, 0, 255)
+
+    def title_tr(self, text):
+        return gray_bg(self.accent(text))
+
+    def render(self, box, tui):
+        title_box, rest = box.top(3)
+        tui.clean_box(title_box)
+        tui.draw_box(title_box, effect=self.accent)
+
+        hovering = tui.hovering(box)
+        tui.add_line(f"{self.title} >", title_box, 1, align=TextAlign.CENTER, effect=self.accent)
+
+        if hovering:
+            content_box = rest.top(len(self.options) + 2)[0]
+            tui.draw_box(content_box)
+
+            rest = content_box.top(1)[1]
+            for i, opt in enumerate(self.options):
+                a, rest = rest.top(1)
+                if tui.clicking(a):
+                    self.on_select(opt)
+                if tui.hovering(a):
+                    tui.add_line(opt, content_box, i + 1, effect=gray_bg)
+                else:
+                    tui.add_line(opt, content_box, i + 1)
+
+    def on_input(self, tui, ch):
+        pass

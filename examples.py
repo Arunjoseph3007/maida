@@ -51,41 +51,6 @@ def block_font(t: str, font):
     return "\n".join(char_str)
 
 
-class SelectWG:
-    def __init__(self, title: str, options: List[str], on_select):
-        super().__init__()
-        self.title = title
-        self.options = options
-        self.on_select = on_select
-
-        self.accent = rgb(255, 0, 255)
-
-    def title_tr(self, text):
-        return gray_bg(self.accent(text))
-
-    def render(self, box, tui):
-        title_box, rest = box.top(3)
-        tui.clean_box(title_box)
-        tui.draw_box(title_box, effect=self.accent)
-
-        hovering = tui.hovering(box)
-        tui.add_line(f"{self.title} >", title_box, 1, align=TextAlign.CENTER, effect=self.accent)
-
-        if hovering:
-            content_box = rest.top(len(self.options) + 2)[0]
-            tui.draw_box(content_box)
-
-            rest = content_box.top(1)[1]
-            for i, opt in enumerate(self.options):
-                a, rest = rest.top(1)
-                if tui.clicking(a):
-                    self.on_select(opt)
-                if tui.hovering(a):
-                    tui.add_line(opt, content_box, i + 1, effect=gray_bg)
-                else:
-                    tui.add_line(opt, content_box, i + 1)
-
-
 class ClockWG:
     def __init__(self):
         super().__init__()
@@ -157,6 +122,7 @@ class DrawModes(enum.Enum):
     DRAW = "DRAW"
     CIRCLE = "CIRCLE"
     SQUARE = "SQUARE"
+    LINE = "LINE"
     ERASER = "ERASER"
 
 
@@ -180,6 +146,34 @@ class PenInpWG(InputWG):
             tui.cursor_loc = self.box.at(2, 1)
 
 
+def get_point_to_line_dist(p, a, b):
+    x3, y3 = p
+    x1, y1 = a
+    x2, y2 = b
+    px = x2 - x1
+    py = y2 - y1
+
+    norm = px * px + py * py
+    if norm == 0:
+        return 0
+
+    u = ((x3 - x1) * px + (y3 - y1) * py) / float(norm)
+
+    if u > 1:
+        u = 1
+    elif u < 0:
+        u = 0
+
+    x = x1 + u * px
+    y = y1 + u * py
+
+    dx = x - x3
+    dy = y - y3
+
+    dist = (dx * dx + dy * dy) ** 0.5
+    return dist
+
+
 class TUIDraw(TUI):
     def __init__(self, *, fps=1):
         super().__init__(fps=fps, mouse_mode=MouseMode.ALL_SGR)
@@ -199,31 +193,45 @@ class TUIDraw(TUI):
         self.mod = self.mod_options[0]
 
         self.sq_start = None
+        self.ln_start = None
         self.circle_c = None
 
         self.pen_inp = PenInpWG()
 
+        self.help_open = True
+        self.short_cuts = [
+            {"key": ESC, "func": self.reset_preview, "desc": "Reset preview of rect, circle, etc"},
+            {"key": CTRL + "q", "func": self.shutdown, "desc": "Exit app"},
+            {"key": CTRL + "w", "func": self.clean_canvas, "desc": "Wipe all drawing"},
+            {"key": CTRL + "c", "func": self.copy_canvas, "desc": "Copy Canvas to Clipboard"},
+            {"key": CTRL + "h", "func": self.toggle_help, "desc": "Toggle this help menu"},
+        ]
+
+    def toggle_help(self):
+        self.help_open = not self.help_open
+
     def on_input(self, ch):
-        if ch == ESC:
-            self.sq_start = None
-            self.circle_c = None
-        if ch == "q":
-            self.shutdown()
-        if ch == "b":
-            self.beep()
-        if ch == "c":
-            self.clean_canvas()
-        if ch == "r":
-            self.render_diff_only = not self.render_diff_only
-        if ch == "p":
-            try:
-                lines = ["".join(row) for row in self.canvas]
-                canvas_text = "\n".join(lines).encode()
-                encoded = base64.b64encode(canvas_text).decode()
-                sys.stdout.write(f"\x1b]52;c;{encoded}\007")
-                sys.stdout.flush()
-            except Exception as e:
-                self.log(LogLevels.ERROR, f"Err: {repr(e)}")
+        for sc in self.short_cuts:
+            if sc["key"] == ch:
+                sc["func"]()
+                break
+
+    def reset_preview(self):
+        self.sq_start = None
+        self.circle_c = None
+        self.ln_start = None
+
+    def copy_canvas(self):
+        with self.error_logging("copy_canvas"):
+            canvas_text = ""
+            for row in self.canvas:
+                for cell in row:
+                    canvas_text += cell or " "
+                canvas_text += "\n"
+            canvas_text = canvas_text.encode()
+            encoded = base64.b64encode(canvas_text).decode()
+            sys.stdout.write(f"\x1b]52;c;{encoded}\007")
+            sys.stdout.flush()
 
     def get_canvas_size(self):
         return len(self.canvas[0]), len(self.canvas)
@@ -291,6 +299,25 @@ class TUIDraw(TUI):
                 if abs(dist_sq - radius_sq) < threshold:
                     canvas[y][x] = self.get_paint()
 
+    def draw_line(self, start, end, canvas=None):
+        if not canvas:
+            canvas = self.canvas
+
+        sx, sy = start
+        ex, ey = end
+
+        minx = min(sx, ex)
+        maxx = max(sx, ex)
+        miny = min(sy, ey)
+        maxy = max(sy, ey)
+
+        threshold = 0.7
+        for x in range(minx - 1, maxx + 1):
+            for y in range(miny - 1, maxy + 1):
+                dist = get_point_to_line_dist((x, y), start, end)
+                if dist < threshold:
+                    canvas[y][x] = self.get_paint()
+
     def erase_block(self, p, canvas=None):
         if not canvas:
             canvas = self.canvas
@@ -300,7 +327,7 @@ class TUIDraw(TUI):
 
         for y in range(cy - h // 2, cy + h // 2):
             for x in range(cx - w // 2, cx + w // 2):
-                canvas[y][x] = None
+                canvas[y][x] = " "
 
     def get_combined_canvas(self):
         w, h = self.get_canvas_size()
@@ -361,6 +388,12 @@ class TUIDraw(TUI):
                             self.circle_c = None
                         else:
                             self.circle_c = (cx, cy)
+                    case DrawModes.LINE.value:
+                        if self.ln_start:
+                            self.draw_line(self.ln_start, (cx, cy))
+                            self.ln_start = None
+                        else:
+                            self.ln_start = (cx, cy)
                     case DrawModes.ERASER.value:
                         self.erase_block((cx, cy))
             elif self.mouse.right_down:
@@ -371,8 +404,35 @@ class TUIDraw(TUI):
                 self.draw_square((cx, cy), self.sq_start, self.preview)
             elif self.circle_c:
                 self.draw_circle(self.circle_c, (cx, cy), self.preview)
+            elif self.ln_start:
+                self.draw_line(self.ln_start, (cx, cy), self.preview)
             elif self.mod == DrawModes.ERASER.value:
                 self.erase_block((cx, cy), self.preview)
+
+        # help menu
+        if self.help_open:
+            with self.withz(100):
+                b = self.box.centered(80, 20)
+                self.clean_box(b)
+                self.draw_box(b)
+
+                _, rest = b.top(1)
+                for shortcut in self.short_cuts:
+                    key = shortcut["key"]
+                    if key == ESC:
+                        key = "ESC"
+                    key = f"<{key}>"
+                    key = key.ljust(6)
+                    key = pale_yellow(key)
+
+                    kb, rest = rest.top(1)
+                    effect = None
+                    if self.hovering(kb):
+                        effect = gray_bg
+                    if self.clicking(kb):
+                        shortcut["func"]()
+
+                    self.add_line(f"{key} {shortcut['desc']}", kb, 0, effect=effect)
 
         canvas_text = self.get_combined_canvas()
         self.blit_text_to_box(canvas_text, canvas, 1, 1)
