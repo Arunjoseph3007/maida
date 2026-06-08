@@ -318,22 +318,16 @@ class KeyEvent:
 
     def __eq__(self, value):
         if type(value) == str:
-            ke = KeyEvent.init(value)
-            if not ke:
-                raise Exception(f"Coudlnt decode {value}")
-            return self == ke
+            return self == KeyEvent.init(value)
 
         if type(value) == type(self):
             return self.key == value.key and self.alt == value.alt and self.ctrl == value.ctrl
 
         raise Exception(f"Cannot eq compare {type(value)}, only supports str and {type(self)}")
-
+    
     def __add__(self, value) -> KeyEvent:
         if type(value) == str:
-            ke = KeyEvent.init(value)
-            if not ke:
-                raise Exception(f"Coudlnt decode {value}")
-            return self + ke
+            return self + KeyEvent.init(value)
 
         if type(value) == type(self):
             return KeyEvent(
@@ -345,30 +339,28 @@ class KeyEvent:
         raise Exception(f"Cannot add {type(value)}, only supports str and {type(self)}")
 
     @staticmethod
-    def init(key: str) -> KeyEvent | None:
-        if len(key) > 2:
-            return None
-
+    def init(key: str) -> KeyEvent:
         # alt key checking
-        if len(key) == 2:
-            if key[0] == ESC:
-                evt = KeyEvent.init(key[1])
-                if not evt:
-                    return None
+        if len(key) == 2 and key[0] == ESC:
+            evt = KeyEvent.init(key[1])
+            if evt:
                 evt.alt = True
                 return evt
-            else:
-                return None
 
-        if key.isprintable():
-            return KeyEvent(key)
+        if len(key) == 1:
+            if key.isprintable():
+                return KeyEvent(key)
 
-        k = ord(key)
-        ch = chr(k + ord("a") - 1)
-        if ch.isprintable():
-            return KeyEvent(ch, ctrl=True)
+            k = ord(key)
+            ch = chr(k + ord("a") - 1)
+            if ch.isprintable():
+                return KeyEvent(ch, ctrl=True)
 
-        return None
+        return KeyEvent(key)
+
+
+def KE(str):
+    return KeyEvent.init(str)
 
 
 ALT = KeyEvent(None, alt=True)
@@ -518,10 +510,7 @@ class TUI(abc.ABC):
                     self.display_diagnostics = not self.display_diagnostics
 
                 ke = KeyEvent.init(ch)
-                if ke:
-                    self.on_input(ke)
-                else:
-                    self.on_input(ch)
+                self.on_input(ke)
 
                 with self.error_logging("loop"):
                     for w in self.widgets:
@@ -769,7 +758,7 @@ class TUI(abc.ABC):
                         self.mouse.normal_update(pos)
                         return None
 
-                    # SGR tracking
+                    # SGR mouse tracking
                     elif ch == "\x1b[<":
                         pos_details = os.read(fd, 1).decode()
                         while pos_details[-1].lower() != "m":
@@ -814,14 +803,14 @@ class TUI(abc.ABC):
         sw, sh = self.screensize
         if cw == 0 or ch == 0:
             return 0, 0
-        return (sw / cw) * (cx + 0.5), (sh / ch) * (cy + 0.5)
+        return (cx + 0.5) * sw / cw, (cy + 0.5) * sh / ch
 
     def get_char_pos(self, sx, sy):
         cw, ch = self.width, self.height
         sw, sh = self.screensize
         if sw == 0 or sh == 0:
             return 0, 0
-        return int((cw / sw) * sx), int((ch / sh) * sy)
+        return sx * cw // sw, sy * ch // sh
 
     def get_mouse_screen_pos(self):
         return self.get_screen_pos(*self.mouse.pos)

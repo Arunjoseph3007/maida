@@ -198,7 +198,7 @@ class TUIDraw(TUI):
 
         self.pen_inp = PenInpWG()
 
-        self.help_open = True
+        self.help_open = False
         self.short_cuts = [
             {"key": ESC, "func": self.reset_preview, "desc": "Reset preview of rect, circle, etc"},
             {"key": CTRL + "q", "func": self.shutdown, "desc": "Exit app"},
