@@ -301,31 +301,49 @@ class ANSI:
         return ANSI.RESET + "".join(self.codes)
 
 
+class Keys(enum.StrEnum):
+    UP = enum.auto()
+    DOWN = enum.auto()
+    LEFT = enum.auto()
+    RIGHT = enum.auto()
+    HOME = enum.auto()
+    END = enum.auto()
+
+
 class KeyEvent:
-    def __init__(self, key: str, *, ctrl=False, alt=False):
+    def __init__(self, key: str | Keys, *, ctrl=False, alt=False, shift=False):
         self.key = key
         self.ctrl = ctrl
         self.alt = alt
+        self.shift = shift
 
     def __str__(self):
-        result = f"Key('{self.key}'"
+        result = f"Key({self.key.encode()}"
         if self.ctrl:
             result += " + CTRL"
+        if self.shift:
+            result += " + SHIFT"
         if self.alt:
             result += " + ALT"
         result += ")"
         return result
 
     def __eq__(self, value):
+        if isinstance(value, Keys):
+            return self == KeyEvent(value)
+
         if type(value) == str:
             return self == KeyEvent.init(value)
 
         if type(value) == type(self):
-            return self.key == value.key and self.alt == value.alt and self.ctrl == value.ctrl
+            return self.key == value.key and self.alt == value.alt and self.ctrl == value.ctrl and self.shift == value.shift
 
-        raise Exception(f"Cannot eq compare {type(value)}, only supports str and {type(self)}")
-    
+        raise Exception(f"Cannot eq compare {type(value)} with {type(self)}")
+
     def __add__(self, value) -> KeyEvent:
+        if isinstance(value, Keys):
+            return self + KeyEvent(value)
+
         if type(value) == str:
             return self + KeyEvent.init(value)
 
@@ -334,12 +352,35 @@ class KeyEvent:
                 key=self.key or value.key,
                 ctrl=self.ctrl or value.ctrl,
                 alt=self.alt or value.alt,
+                shift=self.shift or value.shift,
             )
 
-        raise Exception(f"Cannot add {type(value)}, only supports str and {type(self)}")
+        raise Exception(f"Cannot add {type(value)} with {type(self)}")
 
     @staticmethod
     def init(key: str) -> KeyEvent:
+        arrow_key_mapping = {
+            "A": Keys.UP,
+            "B": Keys.DOWN,
+            "C": Keys.RIGHT,
+            "D": Keys.LEFT,
+        }
+
+        if len(key) == 6 and key.startswith(CSI + "1;"):
+            key_iden = key[-1]
+            modifier = int(key[-2]) - 1
+
+            shift = (modifier >> 0) & 1
+            alt = (modifier >> 1) & 1
+            ctrl = (modifier >> 2) & 1
+
+            if key_iden in arrow_key_mapping:
+                return KeyEvent(arrow_key_mapping[key_iden], ctrl=ctrl, alt=alt, shift=shift)
+
+        if len(key) == 3 and key.startswith(CSI):
+            if key[2] in arrow_key_mapping:
+                return KeyEvent(arrow_key_mapping[key[2]])
+
         # alt key checking
         if len(key) == 2 and key[0] == ESC:
             evt = KeyEvent.init(key[1])
@@ -365,6 +406,7 @@ def KE(str):
 
 ALT = KeyEvent(None, alt=True)
 CTRL = KeyEvent(None, ctrl=True)
+SHIFT = KeyEvent(None, shift=True)
 
 
 class TUI(abc.ABC):
@@ -767,7 +809,6 @@ class TUI(abc.ABC):
                         if self.mouse_mode == MouseMode.ALL_SGR or self.mouse_mode == MouseMode.CLICKS_SGR:
                             self.mouse.sgr_update(pos_details)
                         if self.mouse_mode == MouseMode.SGR_PIXEL:
-                            self.log(LogLevels.DEBUG, pos_details.encode())
                             self.mouse.sgr_pixel_update(pos_details)
                         return None
 
@@ -780,6 +821,13 @@ class TUI(abc.ABC):
                         _, height, width = size_details[:-1].split(";")
                         self.screensize = (int(width), int(height))
                         return None
+
+                    # Modified keys
+                    elif ch == "\x1b[1":
+                        ch += os.read(fd, 1).decode()
+                        if ch == "\x1b[1;":
+                            ch += os.read(fd, 2).decode()
+                            return ch
             return ch
         return None
 
@@ -818,6 +866,18 @@ class TUI(abc.ABC):
     def log(self, level: LogLevels, msg: str):
         log = Log(level=level, message=str(msg))
         self.logs = self.logs[-self.MAX_LOGS :] + [log]
+
+    def ldebug(self, msg: str):
+        self.log(LogLevels.DEBUG, msg)
+
+    def linfo(self, msg: str):
+        self.log(LogLevels.INFO, msg)
+
+    def lwarn(self, msg: str):
+        self.log(LogLevels.WARN, msg)
+
+    def lerror(self, msg: str):
+        self.log(LogLevels.ERROR, msg)
 
 
 SELECT_OPEN = None
