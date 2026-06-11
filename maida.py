@@ -12,6 +12,8 @@ import sys
 import termios
 import traceback
 import tty
+import importlib
+import datetime
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Tuple, List
@@ -308,6 +310,7 @@ class Keys(enum.StrEnum):
     RIGHT = enum.auto()
     HOME = enum.auto()
     END = enum.auto()
+    BACKSPACE = enum.auto()
 
 
 class KeyEvent:
@@ -359,11 +362,13 @@ class KeyEvent:
 
     @staticmethod
     def init(key: str) -> KeyEvent:
-        arrow_key_mapping = {
+        special_key_mappings = {
             "A": Keys.UP,
             "B": Keys.DOWN,
             "C": Keys.RIGHT,
             "D": Keys.LEFT,
+            "H": Keys.HOME,
+            "F": Keys.END,
         }
 
         if len(key) == 6 and key.startswith(CSI + "1;"):
@@ -374,15 +379,15 @@ class KeyEvent:
             alt = (modifier >> 1) & 1
             ctrl = (modifier >> 2) & 1
 
-            if key_iden in arrow_key_mapping:
-                return KeyEvent(arrow_key_mapping[key_iden], ctrl=ctrl, alt=alt, shift=shift)
+            if key_iden in special_key_mappings:
+                return KeyEvent(special_key_mappings[key_iden], ctrl=ctrl, alt=alt, shift=shift)
 
         if len(key) == 3 and key.startswith(CSI):
-            if key[2] in arrow_key_mapping:
-                return KeyEvent(arrow_key_mapping[key[2]])
+            if key[2] in special_key_mappings:
+                return KeyEvent(special_key_mappings[key[2]])
 
         # alt key checking
-        if len(key) == 2 and key[0] == ESC:
+        if len(key) == 2 and key[0] == ESC and key[1].isprintable():
             evt = KeyEvent.init(key[1])
             if evt:
                 evt.alt = True
@@ -391,6 +396,9 @@ class KeyEvent:
         if len(key) == 1:
             if key.isprintable():
                 return KeyEvent(key)
+
+            if key == "\x7f":
+                return KeyEvent(Keys.BACKSPACE)
 
             k = ord(key)
             ch = chr(k + ord("a") - 1)
@@ -415,16 +423,9 @@ class TUI(abc.ABC):
     def __init__(self, *, fps=1, mouse_mode=MouseMode.NONE, render_diff_only=False):
         self.running = True
 
-        self.tty_in = open("/dev/tty", "r")
-        self.tty_out = open("/dev/tty", "w")
-
         self.init_screen()
         self.logs: List[Log] = []
         self.display_diagnostics = False
-
-        fd = self.tty_in.fileno()
-        self._old_termios = termios.tcgetattr(fd)
-        tty.setraw(fd)  # to read char by char instead of buffering
 
         self.render_diff_only = render_diff_only
         self.fps = fps
@@ -434,6 +435,7 @@ class TUI(abc.ABC):
         self.screensize = (0, 0)
 
         self.widgets = []
+        self.started_rendering = False
 
     def query_screensize(self):
         self.tty_out.write("\x1b[14t")
@@ -450,10 +452,10 @@ class TUI(abc.ABC):
         self.old_zbuffer = [[0 for _ in range(self.width)] for _ in range(self.height)]
         self.box = Box(0, 0, self.width, self.height)
         self.cursor_loc = [0, 0]
-        self.query_screensize()
 
     def handle_resize(self, _signum, _frame):
         self.init_screen()
+        self.query_screensize()
         self.wrapped_render()
         self.print_to_screen()
 
@@ -461,6 +463,8 @@ class TUI(abc.ABC):
         self.shutdown()
 
     def __del__(self):
+        if not self.started_rendering:
+            return
         termios.tcsetattr(self.tty_in.fileno(), termios.TCSADRAIN, self._old_termios)
 
         self.tty_out.write("\x1b[?25h")  # show cursor
@@ -529,7 +533,15 @@ class TUI(abc.ABC):
 
             self.render()
 
-    def mainLoop(self):
+    def start_rendering(self):
+        self.tty_in = open("/dev/tty", "r")
+        self.tty_out = open("/dev/tty", "w")
+
+        fd = self.tty_in.fileno()
+        self._old_termios = termios.tcgetattr(fd)
+        tty.setraw(fd)  # to read char by char instead of buffering
+
+        self.query_screensize()
         self.tty_out.write("\x1b[?1049h")  # enter alternate screen
         self.tty_out.write(self.mouse_mode.tracking_code())  # enable mouse tracking
         self.tty_out.flush()
@@ -539,24 +551,32 @@ class TUI(abc.ABC):
         self.wrapped_render()
         self.print_to_screen()
 
+        self.started_rendering = True
+
+    def frame(self):
+        self.widgets = []
+
+        self.clean_out()
+        self.wrapped_render()
+        self.print_to_screen()
+
+        ch = self.get_char(timeout=1 / self.fps)
+        if ch:
+            if CTRL + "d" == ch:
+                self.display_diagnostics = not self.display_diagnostics
+
+            ke = KeyEvent.init(ch)
+            self.ldebug(f"ke {ke}, ch {ch.encode()}")
+            self.on_input(ke)
+
+            with self.error_logging("loop"):
+                for w in self.widgets:
+                    w.on_input(self, ch)
+
+    def mainLoop(self):
+        self.start_rendering()
         while self.running:
-            self.widgets = []
-
-            self.clean_out()
-            self.wrapped_render()
-            self.print_to_screen()
-
-            ch = self.get_char(timeout=1 / self.fps)
-            if ch:
-                if CTRL + "d" == ch:
-                    self.display_diagnostics = not self.display_diagnostics
-
-                ke = KeyEvent.init(ch)
-                self.on_input(ke)
-
-                with self.error_logging("loop"):
-                    for w in self.widgets:
-                        w.on_input(self, ch)
+            self.frame()
 
     def clean_out(self):
         self.zindex = 0
@@ -569,7 +589,7 @@ class TUI(abc.ABC):
         raise "render Not implemented"
 
     @abc.abstractmethod
-    def on_input(self, ch: str | KeyEvent):
+    def on_input(self, ch: KeyEvent):
         raise "update Not implemented"
 
     def beep(self):
@@ -858,7 +878,7 @@ class TUI(abc.ABC):
         sw, sh = self.screensize
         if sw == 0 or sh == 0:
             return 0, 0
-        return sx * cw // sw, sy * ch // sh
+        return int(sx * cw / sw), int(sy * ch / sh)
 
     def get_mouse_screen_pos(self):
         return self.get_screen_pos(*self.mouse.pos)
@@ -968,7 +988,7 @@ class InputWG(Widget):
 
 def write(text: str, cursor: int, ch: str) -> Tuple[str, int, bool]:
     handled = True
-    if ch == "\x7f":  # Backspace
+    if Keys.BACKSPACE == ch:  # Backspace
         if cursor > 0:
             text = text[: cursor - 1] + text[cursor:]
             cursor -= 1
@@ -1021,3 +1041,65 @@ class SelectWG(Widget):
 
     def on_input(self, tui, ch):
         pass
+
+
+class FileWatcher(object):
+    def __init__(self, filename, interval_sec=1):
+        self._cached_stamp = 0
+        self.filename = filename
+        self.last_checked_timestamp = datetime.datetime.now()
+        self.min_interval_sec = interval_sec
+
+    def has_changed(self):
+        d = datetime.datetime.now() - self.last_checked_timestamp
+        if d < datetime.timedelta(seconds=self.min_interval_sec):
+            return False
+        
+        self.last_checked_timestamp = datetime.datetime.now()
+        stamp = os.stat(self.filename).st_mtime
+        if stamp != self._cached_stamp:
+            self._cached_stamp = stamp
+            return True
+        return False
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 3:
+        print("expected 2 args")
+        exit()
+
+    file_name = sys.argv[1]
+    object_name = sys.argv[2]
+    watcher = FileWatcher(file_name)
+    module_name = file_name[:-3]
+
+
+    mod = importlib.import_module(module_name)
+    if not hasattr(mod, object_name):
+        print(f"No {object_name} defined in module {module_name}")
+        exit()
+
+    tui_obj: TUI = getattr(mod, object_name)
+
+    try:
+        tui_obj.start_rendering()
+
+        while True:
+            if watcher.has_changed():
+                try:
+                    mod = importlib.reload(mod)
+                    if not hasattr(mod, object_name):
+                        print(f"No {object_name} defined in module {module_name}")
+                        exit()
+
+                    tui_obj = getattr(mod, object_name)
+                    tui_obj.start_rendering()
+                except Exception as e:
+                    tui_obj.lerror(f"err while trying to reload module - {repr(e)}")
+            else:
+                if tui_obj.running:
+                    tui_obj.frame()
+                else:
+                    break
+    except Exception as e:
+        print(f'error - {repr(e)}')

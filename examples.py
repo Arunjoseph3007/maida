@@ -520,6 +520,9 @@ class TUIAnsi(TUI):
             scrolly=self.scroll[1],
         )
 
+draw = TUIDraw()
+ansi = TUIAnsi()
+clock = TUIClock()
 
 if __name__ == "__main__":
     if len(sys.argv) == 1:
