@@ -63,11 +63,13 @@ dim_bg = ansi(f"{CSI}48;100;100;100;Bm")
 blink = ansi(f"{CSI}5m")
 bold = ansi(f"{CSI}1m")
 red = ansi(f"{CSI}31m")
+green = ansi(f"{CSI}32m")
 black = ansi(f"{CSI}38;5;0m")
 pale_yellow = ansi(f"{CSI}38;5;106m")
 gray_bg = ansi(f"{CSI}37;48;5;236m")
 pale_yellow_bg = rgb(156, 196, 102)
 orange = rgb(207, 178, 101)
+cyan = rgb(0, 255, 255)
 
 
 class Box:
@@ -215,6 +217,10 @@ class Mouse:
         self.left_down = False
         self.right_down = False
         self.state = None
+
+    def reset(self):
+        self.left_down = False
+        self.right_down = False
 
     @property
     def pos(self):
@@ -555,10 +561,8 @@ class TUI(abc.ABC):
 
     def frame(self):
         self.widgets = []
-
         self.clean_out()
-        self.wrapped_render()
-        self.print_to_screen()
+        self.mouse.reset()
 
         ch = self.get_char(timeout=1 / self.fps)
         if ch:
@@ -566,12 +570,14 @@ class TUI(abc.ABC):
                 self.display_diagnostics = not self.display_diagnostics
 
             ke = KeyEvent.init(ch)
-            self.ldebug(f"ke {ke}, ch {ch.encode()}")
             self.on_input(ke)
 
             with self.error_logging("loop"):
                 for w in self.widgets:
                     w.on_input(self, ch)
+
+        self.wrapped_render()
+        self.print_to_screen()
 
     def mainLoop(self):
         self.start_rendering()
@@ -939,6 +945,34 @@ def select_wg(tui: TUI, box: Box, title: str, selected: str, options: List[str],
         return selected
 
 
+def toggle(tui: TUI, box: Box, title: str, selected: bool) -> bool:
+    hovering = tui.hovering(box)
+    clicking = tui.clicking(box)
+
+    # icon = "✅" if selected else "⭕" # This causes emoji len related errors
+    icon = green("Y") if selected else red("N")
+
+    tui.add_line(f"{icon} {title}", box, 0, effect=gray_bg if hovering else None)
+    if clicking:
+        tui.ldebug(f"toggle activated")
+        return not selected
+    else:
+        return selected
+
+
+def button(tui: TUI, box: Box, title: str, *, disabled=False) -> bool:
+    effect = noop
+    if tui.hovering(box):
+        effect = gray_bg
+    if disabled:
+        effect = dim
+    tui.blit_text_to_box(effect(title), box, 0, 0)
+
+    if disabled:
+        return False
+    return tui.clicking(box)
+
+
 class Widget(abc.ABC):
     @abc.abstractmethod
     def render(self, tui: TUI, box: Box):
@@ -1054,7 +1088,7 @@ class FileWatcher(object):
         d = datetime.datetime.now() - self.last_checked_timestamp
         if d < datetime.timedelta(seconds=self.min_interval_sec):
             return False
-        
+
         self.last_checked_timestamp = datetime.datetime.now()
         stamp = os.stat(self.filename).st_mtime
         if stamp != self._cached_stamp:
@@ -1072,7 +1106,6 @@ if __name__ == "__main__":
     object_name = sys.argv[2]
     watcher = FileWatcher(file_name)
     module_name = file_name[:-3]
-
 
     mod = importlib.import_module(module_name)
     if not hasattr(mod, object_name):
@@ -1102,4 +1135,4 @@ if __name__ == "__main__":
                 else:
                     break
     except Exception as e:
-        print(f'error - {repr(e)}')
+        print(f"error - {repr(e)}")
