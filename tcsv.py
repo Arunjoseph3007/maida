@@ -11,12 +11,34 @@ class TUICSV(TUI):
 
         self.help_open = False
         self.ctrl_open = False
+
         self.short_cuts = [
             {"key": CTRL + "q", "func": self.shutdown, "desc": "Exit app"},
             {"key": CTRL + "r", "func": self.process_file, "desc": "Reload file data"},
             {"key": CTRL + "h", "func": self.toggle_help, "desc": "Toggle this help menu"},
             {"key": CTRL + "c", "func": self.toggle_ctrl, "desc": "Toggle Control Panel"},
         ]
+
+        self.find_mode = False
+        self.query = ""
+        self.query_curs = 0
+        self.query_res_lines: List[int] = []
+        self.query_res_feild: List[str] = []
+        self.active_query_res = 0
+
+    def compute_query(self):
+        self.query_res_lines = []
+        self.query_res_feild = []
+        if not self.query:
+            return
+
+        self.active_query_res = 0
+        for i, r in enumerate(self.rows):
+            for f in self.fieldnames:
+                if self.feilds_selected[f]:
+                    if self.query in r[f]:
+                        self.query_res_lines.append(i)
+                        self.query_res_feild.append(f)
 
     def toggle_ctrl(self):
         self.ctrl_open = not self.ctrl_open
@@ -43,15 +65,34 @@ class TUICSV(TUI):
             self.feilds_selected = {k: True for k in self.fieldnames}
 
     def format_row(self, row, i, effect=noop):
+        has_result = i in self.query_res_lines
+
         result = f"{dim(str(i).ljust(3))} "
+        if has_result:
+            result = red(result)
+
+        selection_line = -1
+        selection_feild = None
+        if len(self.query_res_feild):
+            selection_line = self.query_res_lines[self.active_query_res]
+            selection_feild = self.query_res_feild[self.active_query_res]
+
         for f in self.fieldnames:
             if self.feilds_selected[f]:
-                result += effect(row[f][: self.feildlens[f]].ljust(self.feildlens[f])) + "  "
+                if has_result and i == selection_line and f == selection_feild:
+                    result += gray_bg(red(row[f][: self.feildlens[f]].ljust(self.feildlens[f])))
+                elif has_result and self.query in row[f]:
+                    result += red(row[f][: self.feildlens[f]].ljust(self.feildlens[f]))
+                else:
+                    result += effect(row[f][: self.feildlens[f]].ljust(self.feildlens[f]))
+
+                result += "  "
 
         return result
 
     def render(self):
         header, b = self.box.top(2)
+        b, search = b.bottom(2)
 
         self.add_line(f"File - {self.file} :: {self.line_num} Rows, Dialect - {self.dialect}", header, 1)
 
@@ -63,6 +104,11 @@ class TUICSV(TUI):
         total_res = "\n".join([self.format_row(r, i) for i, r in enumerate(self.rows)])
         self.blit_text_to_box(total_res, b, 1, 3, scrolly=self.scroll)
 
+        if self.find_mode:
+            self.add_line(f"/{self.query}", search, 0)
+            self.cursor_loc = search.at(self.query_curs + 2, 0)
+        else:
+            self.cursor_loc = search.at(0, 0)
         # help panel
         if self.help_open:
             with self.withz(100):
@@ -116,10 +162,34 @@ class TUICSV(TUI):
                 self.add_line(f"Dialect - {self.dialect}", rest, 1, effect=pale_yellow)
 
     def on_input(self, ch):
+        if self.find_mode:
+            if ch == Keys.UP and self.active_query_res > 0:
+                self.active_query_res -= 1
+                self.scroll = self.query_res_lines[self.active_query_res]
+            if ch == Keys.DOWN and self.active_query_res < len(self.query_res_lines) - 1:
+                self.active_query_res += 1
+                self.scroll = self.query_res_lines[self.active_query_res]
+
+            if ch == ESC:
+                self.query = ""
+                self.compute_query()
+                self.find_mode = False
+            if not self.query and ch == Keys.BACKSPACE:
+                self.find_mode = False
+
+            else:
+                self.query, self.query_curs, changed = write(self.query, self.query_curs, ch)
+                if changed:
+                    self.compute_query()
+            return
+
         for sc in self.short_cuts:
             if sc["key"] == ch:
                 sc["func"]()
                 break
+
+        if ch == "/":
+            self.find_mode = True
 
         if ch == Keys.DOWN:
             if self.scroll < len(self.rows):

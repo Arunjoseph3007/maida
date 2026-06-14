@@ -287,7 +287,8 @@ class Log:
 
 
 class ANSI:
-    RE = re.compile(r"\x1b\[[0-9;]*(m|K)")
+    RE = re.compile(r"\x1b\[[0-9;]*m")
+    # RE = re.compile(r"\x1b\[[0-9;]*(m|K)")
     RESET = "\x1b[0m"
 
     def __init__(self):
@@ -317,6 +318,8 @@ class Keys(enum.StrEnum):
     HOME = enum.auto()
     END = enum.auto()
     BACKSPACE = enum.auto()
+    ENTER = enum.auto()
+    ESC = enum.auto()
 
 
 class KeyEvent:
@@ -403,11 +406,15 @@ class KeyEvent:
             if key.isprintable():
                 return KeyEvent(key)
 
-            if key == "\x7f":
-                return KeyEvent(Keys.BACKSPACE)
+            mappings = {
+                "\x7f": Keys.BACKSPACE,
+                "\r": Keys.ENTER,
+                ESC: Keys.ESC,
+            }
+            if key in mappings:
+                return KeyEvent(mappings[key])
 
-            k = ord(key)
-            ch = chr(k + ord("a") - 1)
+            ch = chr(ord(key) + ord("a") - 1)
             if ch.isprintable():
                 return KeyEvent(ch, ctrl=True)
 
@@ -1020,20 +1027,20 @@ class InputWG(Widget):
             tui.cursor_loc = [cx, cy]
 
 
-def write(text: str, cursor: int, ch: str) -> Tuple[str, int, bool]:
+def write(text: str, cursor: int, ch: KeyEvent) -> Tuple[str, int, bool]:
     handled = True
-    if Keys.BACKSPACE == ch:  # Backspace
+    if ch == Keys.BACKSPACE:
         if cursor > 0:
             text = text[: cursor - 1] + text[cursor:]
             cursor -= 1
-    elif ch == "\x1b[C":  # right arrow
+    elif ch == Keys.RIGHT:
         if cursor < len(text):
             cursor += 1
-    elif ch == "\x1b[D":  # left arrow
+    elif ch == Keys.LEFT:
         if cursor > 0:
             cursor -= 1
-    elif ch.isprintable():
-        text = text[:cursor] + ch + text[cursor:]
+    elif type(ch.key) == str and ch.key.isprintable():
+        text = text[:cursor] + ch.key + text[cursor:]
         cursor += 1
     else:
         handled = False
@@ -1117,7 +1124,7 @@ if __name__ == "__main__":
     try:
         tui_obj.start_rendering()
 
-        while True:
+        while tui_obj.running:
             if watcher.has_changed():
                 try:
                     mod = importlib.reload(mod)
@@ -1130,9 +1137,6 @@ if __name__ == "__main__":
                 except Exception as e:
                     tui_obj.lerror(f"err while trying to reload module - {repr(e)}")
             else:
-                if tui_obj.running:
-                    tui_obj.frame()
-                else:
-                    break
+                tui_obj.frame()
     except Exception as e:
         print(f"error - {repr(e)}")
