@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import abc
+import unicodedata
 import enum
 import math
 import os
@@ -18,7 +19,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Tuple, List
 
-# TODO emojis are a problem
 # TODO better input editing (ctrl-back, del)
 
 
@@ -121,8 +121,38 @@ class Box:
     def splitv(self):
         return self.top(self.h // 2)
 
-    def pad(self, p: int = 1):
-        return Box(self.x + p, self.y + p, self.w - 2 * p, self.h - 2 * p)
+    def pad(
+        self,
+        p: int = 0,
+        *,
+        x: int = None,
+        y: int = None,
+        top: int = None,
+        bottpm: int = None,
+        left: int = None,
+        right: int = None,
+    ):
+        pt = p
+        pb = p
+        pl = p
+        pr = p
+
+        if x is not None:
+            pl = x
+            pr = x
+        if y is not None:
+            pt = y
+            pb = y
+
+        if top is not None:
+            pt = top
+        if bottpm is not None:
+            pb = bottpm
+        if left is not None:
+            pl = left
+        if right is not None:
+            pr = right
+        return Box(self.x + pl, self.y + pt, self.w - pl - pr, self.h - pb - pt)
 
     def at(self, x: int, y: int):
         return self.x + x, self.y + y
@@ -668,9 +698,7 @@ class TUI(abc.ABC):
         *,
         scrollx: int = 0,
         scrolly: int = 0,
-        wrap: bool = False,
     ):
-        assert not wrap, "Wrap is not supported yet"
         xo, yo = box.at(bxo, byo)
 
         lines = text.splitlines()
@@ -699,9 +727,15 @@ class TUI(abc.ABC):
                         and col < self.width - 1
                         and box.within(col, row)
                     ):
-                        self.cwrite(col, row, prefix + line[i])
+                        if unicodedata.east_asian_width(line[i]) in ("W", "F"):
+                            self.cwrite(col, row, prefix + line[i])
+                            self.cwrite(col + 1, row, "")
+                        else:
+                            self.cwrite(col, row, prefix + line[i])
                         prefix = ""
                     x += 1
+                    if unicodedata.east_asian_width(line[i]) in ("W", "F"):
+                        x += 1
                     i += 1
 
             if (
@@ -973,7 +1007,8 @@ def button(tui: TUI, box: Box, title: str, *, disabled=False) -> bool:
         effect = gray_bg
     if disabled:
         effect = dim
-    tui.blit_text_to_box(effect(title), box, 0, 0)
+    tui.add_line(title, box, 0, align=TextAlign.CENTER, effect=effect)
+    # tui.blit_text_to_box(effect(title), box, 0, 0)
 
     if disabled:
         return False

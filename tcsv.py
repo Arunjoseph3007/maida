@@ -1,6 +1,13 @@
 from maida import *
 import csv
 import sys
+import enum
+
+
+class SortState(enum.Enum):
+    NONE = enum.auto()
+    ASCE = enum.auto()
+    DESC = enum.auto()
 
 
 class TUICSV(TUI):
@@ -11,6 +18,8 @@ class TUICSV(TUI):
 
         self.help_open = False
         self.ctrl_open = False
+        self.sort_feild: str | None = 'sid'
+        self.sort_state = SortState.ASCE
 
         self.short_cuts = [
             {"key": CTRL + "q", "func": self.shutdown, "desc": "Exit app"},
@@ -64,6 +73,23 @@ class TUICSV(TUI):
             self.feildlens = {k: clamp(v, 4, 50) for k, v in self.feildlens.items()}
             self.feilds_selected = {k: True for k in self.fieldnames}
 
+    def format_header(self):
+        result = dim("#   ")
+
+        for f in self.fieldnames:
+            if self.feilds_selected[f]:
+                h = cyan(f[: self.feildlens[f]].ljust(self.feildlens[f])) + "  "
+
+                if self.sort_feild == f:
+                    match self.sort_state:
+                        case SortState.ASCE:
+                            h = h[:-2] + "🔺"
+                        case SortState.DESC:
+                            h = h[:-2] + "🔻"
+
+                result += h
+        return result
+
     def format_row(self, row, i, effect=noop):
         has_result = i in self.query_res_lines
 
@@ -98,7 +124,7 @@ class TUICSV(TUI):
 
         hrow = {x: x for x in self.fieldnames}
         self.blit_text_to_box(dim("─" * 1000), b, 1, 0)
-        self.blit_text_to_box(self.format_row(hrow, "#", cyan), b, 1, 1)
+        self.blit_text_to_box(self.format_header(), b, 1, 1)
         self.blit_text_to_box(dim("─" * 1000), b, 1, 2)
 
         total_res = "\n".join([self.format_row(r, i) for i, r in enumerate(self.rows)])
@@ -144,20 +170,36 @@ class TUICSV(TUI):
 
                 self.add_line("Feilds selection", b, 1, effect=pale_yellow)
 
-                rest = b.top(2)[1]
+                rest = b.pad(top=2)
                 feilds = [x for x in self.fieldnames]
                 for i, f in enumerate(feilds):
                     tb, rest = rest.top(1)
                     left, right = tb.left(20)
                     self.feilds_selected[f] = toggle(self, left, f, self.feilds_selected[f])
 
-                    upb, right = right.left(3)
+                    upb, right = right.left(4)
                     if button(self, upb, "⬆", disabled=i <= 0):
                         self.fieldnames[i - 1], self.fieldnames[i] = self.fieldnames[i], self.fieldnames[i - 1]
 
-                    downb, right = right.left(3)
+                    downb, right = right.left(4)
                     if button(self, downb, "⬇", disabled=i >= len(feilds) - 1):
                         self.fieldnames[i + 1], self.fieldnames[i] = self.fieldnames[i], self.fieldnames[i + 1]
+
+                    sortb, right = right.left(8)
+                    if button(self, sortb, "Sort"):
+                        if not self.sort_feild or self.sort_feild != f:
+                            self.sort_feild = f
+                            self.sort_state = SortState.ASCE
+                            self.rows.sort(key=lambda x: x[f])
+                        # sort_feild is defined and equla to f
+                        elif self.sort_state == SortState.ASCE:
+                            self.sort_state = SortState.DESC
+                            self.rows.sort(key=lambda x: x[f], reverse=True)
+                        elif self.sort_state == SortState.DESC:
+                            self.sort_state = SortState.NONE
+                        elif self.sort_state == SortState.NONE:
+                            self.sort_state = SortState.ASCE
+                            self.rows.sort(key=lambda x: x[f])
 
                 self.add_line(f"Dialect - {self.dialect}", rest, 1, effect=pale_yellow)
 
