@@ -10,6 +10,10 @@ class SortState(enum.Enum):
     DESC = enum.auto()
 
 
+def strfit(t: str, l: int):
+    return t[:l].ljust(l)
+
+
 class TUICSV(TUI):
     def __init__(self, filename):
         super().__init__(fps=30, mouse_mode=MouseMode.ALL_SGR)
@@ -18,8 +22,8 @@ class TUICSV(TUI):
 
         self.help_open = False
         self.ctrl_open = False
-        self.sort_feild: str | None = 'sid'
-        self.sort_state = SortState.ASCE
+        self.sort_feild: str | None = None
+        self.sort_state = SortState.NONE
 
         self.short_cuts = [
             {"key": CTRL + "q", "func": self.shutdown, "desc": "Exit app"},
@@ -78,7 +82,7 @@ class TUICSV(TUI):
 
         for f in self.fieldnames:
             if self.feilds_selected[f]:
-                h = cyan(f[: self.feildlens[f]].ljust(self.feildlens[f])) + "  "
+                h = cyan(strfit(f, self.feildlens[f])) + "  "
 
                 if self.sort_feild == f:
                     match self.sort_state:
@@ -90,7 +94,7 @@ class TUICSV(TUI):
                 result += h
         return result
 
-    def format_row(self, row, i, effect=noop):
+    def format_row(self, row, i):
         has_result = i in self.query_res_lines
 
         result = f"{dim(str(i).ljust(3))} "
@@ -105,14 +109,14 @@ class TUICSV(TUI):
 
         for f in self.fieldnames:
             if self.feilds_selected[f]:
-                if has_result and i == selection_line and f == selection_feild:
-                    result += gray_bg(red(row[f][: self.feildlens[f]].ljust(self.feildlens[f])))
-                elif has_result and self.query in row[f]:
-                    result += red(row[f][: self.feildlens[f]].ljust(self.feildlens[f]))
-                else:
-                    result += effect(row[f][: self.feildlens[f]].ljust(self.feildlens[f]))
+                fres = strfit(row[f], self.feildlens[f])
 
-                result += "  "
+                if has_result and i == selection_line and f == selection_feild:
+                    fres = gray_bg(red(fres))
+                elif has_result and self.query in row[f]:
+                    fres = red(fres)
+
+                result += fres + "  "
 
         return result
 
@@ -122,7 +126,6 @@ class TUICSV(TUI):
 
         self.add_line(f"File - {self.file} :: {self.line_num} Rows, Dialect - {self.dialect}", header, 1)
 
-        hrow = {x: x for x in self.fieldnames}
         self.blit_text_to_box(dim("─" * 1000), b, 1, 0)
         self.blit_text_to_box(self.format_header(), b, 1, 1)
         self.blit_text_to_box(dim("─" * 1000), b, 1, 2)

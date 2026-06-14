@@ -987,32 +987,23 @@ def select_wg(tui: TUI, box: Box, title: str, selected: str, options: List[str],
 
 
 def toggle(tui: TUI, box: Box, title: str, selected: bool) -> bool:
-    hovering = tui.hovering(box)
-    clicking = tui.clicking(box)
-
-    # icon = "✅" if selected else "⭕" # This causes emoji len related errors
-    icon = green("Y") if selected else red("N")
-
-    tui.add_line(f"{icon} {title}", box, 0, effect=gray_bg if hovering else None)
-    if clicking:
-        tui.ldebug(f"toggle activated")
+    icon = "✅" if selected else "⭕"
+    tui.add_line(f"{icon} {title}", box, 0, effect=tui.hovering(box) and gray_bg)
+    
+    if tui.clicking(box):
         return not selected
-    else:
-        return selected
+    return selected
 
 
 def button(tui: TUI, box: Box, title: str, *, disabled=False) -> bool:
-    effect = noop
+    effect = None
     if tui.hovering(box):
         effect = gray_bg
     if disabled:
         effect = dim
-    tui.add_line(title, box, 0, align=TextAlign.CENTER, effect=effect)
-    # tui.blit_text_to_box(effect(title), box, 0, 0)
 
-    if disabled:
-        return False
-    return tui.clicking(box)
+    tui.add_line(title, box, 0, align=TextAlign.CENTER, effect=effect)
+    return not disabled and tui.clicking(box)
 
 
 class Widget(abc.ABC):
