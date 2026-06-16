@@ -37,6 +37,10 @@ def ansi(effect: str):
     return wrapper
 
 
+def is_widechar(l: str) -> bool:
+    return unicodedata.east_asian_width(l) in ("W", "F")
+
+
 def next_line(c=0, step=1):
     while True:
         yield c
@@ -729,6 +733,7 @@ class TUI(abc.ABC):
                     prefix = ansi.state_code
                     i = m.end()
                 else:
+                    iswidechar = is_widechar(line[i])
                     if (
                         row > 0
                         and row < self.height - 1
@@ -736,14 +741,14 @@ class TUI(abc.ABC):
                         and col < self.width - 1
                         and box.within(col, row)
                     ):
-                        if unicodedata.east_asian_width(line[i]) in ("W", "F"):
+                        if iswidechar:
                             self.cwrite(col, row, prefix + line[i])
                             self.cwrite(col + 1, row, "")
                         else:
                             self.cwrite(col, row, prefix + line[i])
                         prefix = ""
                     x += 1
-                    if unicodedata.east_asian_width(line[i]) in ("W", "F"):
+                    if iswidechar:
                         x += 1
                     i += 1
 
