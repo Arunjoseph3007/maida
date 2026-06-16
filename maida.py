@@ -479,6 +479,7 @@ class TUI(abc.ABC):
 
         self.widgets = []
         self.started_rendering = False
+        self.ended_rendering = False
 
     def query_screensize(self):
         self.tty_out.write("\x1b[14t")
@@ -505,11 +506,13 @@ class TUI(abc.ABC):
     def handle_exit(self, _signum, _frame):
         self.shutdown()
 
-    def __del__(self):
+    def end_rendering(self):
         if not self.started_rendering:
             return
-        termios.tcsetattr(self.tty_in.fileno(), termios.TCSADRAIN, self._old_termios)
+        if self.ended_rendering:
+            return
 
+        termios.tcsetattr(self.tty_in.fileno(), termios.TCSADRAIN, self._old_termios)
         self.tty_out.write("\x1b[?25h")  # show cursor
         self.tty_out.write("\x1b[?7h")  # re-enable autowrap
         self.tty_out.write("\x1b[?1049l")  # exit alternate screen (restores previous terminal content)
@@ -518,6 +521,11 @@ class TUI(abc.ABC):
 
         self.tty_in.close()
         self.tty_out.close()
+
+        self.ended_rendering = True
+
+    def __del__(self):
+        self.end_rendering()
 
     def mount(self, widget, box):
         self.widgets.append(widget)
@@ -620,6 +628,7 @@ class TUI(abc.ABC):
         self.start_rendering()
         while self.running:
             self.frame()
+        self.end_rendering()
 
     def clean_out(self):
         self.zindex = 0
@@ -989,7 +998,7 @@ def select_wg(tui: TUI, box: Box, title: str, selected: str, options: List[str],
 def toggle(tui: TUI, box: Box, title: str, selected: bool) -> bool:
     icon = "✅" if selected else "⭕"
     tui.add_line(f"{icon} {title}", box, 0, effect=tui.hovering(box) and gray_bg)
-    
+
     if tui.clicking(box):
         return not selected
     return selected
