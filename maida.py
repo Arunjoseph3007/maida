@@ -741,11 +741,10 @@ class TUI(abc.ABC):
                         and col < self.width - 1
                         and box.within(col, row)
                     ):
+                        self.cwrite(col, row, prefix + line[i])
                         if iswidechar:
-                            self.cwrite(col, row, prefix + line[i])
+                            # TODO this might be risky, we need to check all constraints before this write as well
                             self.cwrite(col + 1, row, "")
-                        else:
-                            self.cwrite(col, row, prefix + line[i])
                         prefix = ""
                     x += 1
                     if iswidechar:
