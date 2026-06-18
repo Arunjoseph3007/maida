@@ -352,6 +352,7 @@ class Keys(enum.StrEnum):
     HOME = enum.auto()
     END = enum.auto()
     BACKSPACE = enum.auto()
+    DEL = enum.auto()
     ENTER = enum.auto()
     ESC = enum.auto()
 
@@ -403,6 +404,9 @@ class KeyEvent:
 
         raise Exception(f"Cannot add {type(value)} with {type(self)}")
 
+    def isprintable(self):
+        return type(self.key) == str and self.key.isprintable()
+
     @staticmethod
     def init(key: str) -> KeyEvent:
         special_key_mappings = {
@@ -424,6 +428,10 @@ class KeyEvent:
 
             if key_iden in special_key_mappings:
                 return KeyEvent(special_key_mappings[key_iden], ctrl=ctrl, alt=alt, shift=shift)
+
+        if len(key) == 4:
+            if key == CSI + "3~":
+                return KeyEvent(Keys.DEL)
 
         if len(key) == 3 and key.startswith(CSI):
             if key[2] in special_key_mappings:
@@ -907,6 +915,12 @@ class TUI(abc.ABC):
                         ch += os.read(fd, 1).decode()
                         if ch == "\x1b[1;":
                             ch += os.read(fd, 2).decode()
+                            return ch
+                        
+                    # delete key
+                    elif ch == "\x1b[3":
+                        ch += os.read(fd, 1).decode()
+                        if ch == "\x1b[3~":
                             return ch
             return ch
         return None
