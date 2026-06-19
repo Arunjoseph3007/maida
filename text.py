@@ -1,6 +1,5 @@
 from maida import *
 
-# TODO display selections somehow
 # TODO ctrl movements, arrow, backspace, del
 # TODO undo redo
 
@@ -176,11 +175,11 @@ class TUICSV(TUI):
 
     @property
     def cx(self):
-        return self.tcursor.start.cx
+        return self.tcursor.end.cx
 
     @property
     def cy(self):
-        return self.tcursor.start.cy
+        return self.tcursor.end.cy
 
     @property
     def cline(self):
@@ -206,7 +205,21 @@ class TUICSV(TUI):
 
         lineno = self.scroll
         for i, line in enumerate(self.lines[self.scroll :]):
-            ltext = f"{dim(str(lineno + 1).ljust(line_no_space))} {line}"
+            lnt = dim(str(lineno + 1).ljust(line_no_space))
+            ltext = f"{lnt} {line}"
+            sel_eff = lambda x: gray_bg(dim(x))
+            if self.tcursor.is_selection():
+                sx, sy = self.tcursor.sel_start
+                ex, ey = self.tcursor.sel_end
+                if sy == ey == lineno:
+                    ltext = f"{lnt} {line[:sx]}{sel_eff(line[sx:ex])}{line[ex:]}"
+                elif lineno == sy:
+                    ltext = f"{lnt} {line[:sx]}{sel_eff(line[sx:])}"
+                elif lineno == ey:
+                    ltext = f"{lnt} {sel_eff(line[:ex])}{line[ex:]}"
+                elif ey > lineno > sy:
+                    ltext = f"{lnt} {sel_eff(line)}"
+
             self.blit_text_to_box(ltext, box, 1, 1 + i)
             lineno += 1
 
@@ -290,6 +303,8 @@ class TUICSV(TUI):
                 self.lines[self.cy] = pre
                 self.lines.insert(self.cy + 1, post)
                 self.tcursor.down(self.lines)
+            elif ch == CTRL + Keys.LEFT:
+                self.cursor_regulate()
 
         # check if cursor is on screen
         if self.cy < self.scroll:
