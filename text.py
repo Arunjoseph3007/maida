@@ -192,26 +192,23 @@ class TUICSV(TUI):
             self.lerror(f"Path {path} does not exist")
         if path.is_dir():
             self.linfo(f"Directory {path} loaded")
-            self.dir = path
-            self.file = None
-            self.load_dir()
+            self.load_dir(path)
         elif path.is_file():
             self.linfo(f"File {path} loaded")
-            self.dir = None
-            self.file = path
-            self.load_file()
+            self.load_file(path)
 
-    def load_dir(self):
-        if not self.dir:
-            return
+    def load_dir(self, path):
+        self.dir = path
+        self.file = None
 
         self.ftree = list(os.scandir(self.dir))
         self.ftree.sort(key=dir_entry_sort)
 
-    def load_file(self):
+    def load_file(self, path):
+        self.dir = None
+        self.file = path
+
         self.tcursor = Cursor()
-        if not self.file:
-            return
         with open(self.file) as f:
             self.lines = f.read().splitlines()
 
@@ -307,7 +304,10 @@ class TUICSV(TUI):
             self.save()
             return
         if ch == CTRL + "r":
-            self.load_file()
+            if self.file:
+                self.load_file(self.file)
+            if self.dir:
+                self.load_dir(self.dir)
             return
 
         with self.error_logging("nav"):
