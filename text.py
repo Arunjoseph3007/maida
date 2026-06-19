@@ -1,7 +1,18 @@
 from maida import *
+import base64
+import pathlib
+import os
+import sys
 
-# TODO ctrl movements, arrow, backspace, del
+# TODO ctrl backspace, del
 # TODO undo redo
+
+
+def dir_entry_sort(k: os.DirEntry[str]):
+    if k.is_dir():
+        return "0" + k.name
+    else:
+        return "1" + k.name
 
 
 class Anchor:
@@ -76,6 +87,20 @@ class Cursor:
 
     def is_selection(self):
         return self.start != self.end
+
+    def get_selection_text(self, lines):
+        if not self.is_selection():
+            return ""
+
+        sx, sy = self.sel_start
+        ex, ey = self.sel_end
+        if sy == ey:
+            return lines[sy][sx:ex]
+        else:
+            text = lines[sy][sx:] + "\n"
+            for i in range(sy + 1, ey):
+                text += lines[i] + "\n"
+            return text + lines[ey][:ex]
 
     def empty_selection(self, lines: list):
         if not self.is_selection():
@@ -152,20 +177,47 @@ class Cursor:
 
 
 class TUICSV(TUI):
-    def __init__(self, filename):
+    def __init__(self, name):
         super().__init__(fps=30, mouse_mode=MouseMode.ALL_SGR)
-        self.file = filename
+        self.lines = [""]
         self.tcursor = Cursor()
-        self.load()
         self.scroll = 0
         self.box_height = 0
 
-    def load(self):
+        path = pathlib.Path(name)
+        self.load_path(path)
+
+    def load_path(self, path: pathlib.Path):
+        if not path.exists():
+            self.lerror(f"Path {path} does not exist")
+        if path.is_dir():
+            self.linfo(f"Directory {path} loaded")
+            self.dir = path
+            self.file = None
+            self.load_dir()
+        elif path.is_file():
+            self.linfo(f"File {path} loaded")
+            self.dir = None
+            self.file = path
+            self.load_file()
+
+    def load_dir(self):
+        if not self.dir:
+            return
+
+        self.ftree = list(os.scandir(self.dir))
+        self.ftree.sort(key=dir_entry_sort)
+
+    def load_file(self):
         self.tcursor = Cursor()
+        if not self.file:
+            return
         with open(self.file) as f:
             self.lines = f.read().splitlines()
 
     def save(self):
+        if not self.file:
+            return
         with open(self.file, "w") as f:
             f.write("\n".join(self.lines))
 
@@ -190,10 +242,27 @@ class TUICSV(TUI):
         self.tcursor.end.cursor_regulate(self.lines)
 
     def render(self):
-        sidebar, box = self.box.left(30)
-        self.draw_box(sidebar)
+        ftree_box, box = self.box.left(30)
+        self.draw_box(ftree_box)
         self.draw_box(box)
         self.box_height = box.pad(1).h
+
+        # File tree
+        rest = ftree_box.pad(top=1)
+
+        fteb, rest = rest.top(1)
+        if button(self, fteb, "  ..", align=TextAlign.LEFT):
+            path = pathlib.Path(self.dir or self.file).parent
+            self.load_path(path)
+
+        if self.dir:
+            for entry in self.ftree:
+                fteb, rest = rest.top(1)
+                label = "> " if entry.is_dir() else "  "
+                label += entry.name
+                if button(self, fteb, label, align=TextAlign.LEFT):
+                    path = pathlib.Path(self.dir) / pathlib.Path(entry.name)
+                    self.load_path(path)
 
         line_no_space = len(str(self.nlines))
 
@@ -223,11 +292,12 @@ class TUICSV(TUI):
             self.blit_text_to_box(ltext, box, 1, 1 + i)
             lineno += 1
 
-        diag = box.top_right(30, 10)
-        self.draw_box(diag)
-        self.add_line(f"is sel - {self.tcursor.is_selection()}", diag, 1)
-        self.add_line(f"start - {self.tcursor.start}", diag, 2)
-        self.add_line(f"end - {self.tcursor.end}", diag, 3)
+        if self.display_diagnostics:
+            diag = box.bottom_right(30, 10)
+            self.draw_box(diag)
+            self.add_line(f"is sel - {self.tcursor.is_selection()}", diag, 1)
+            self.add_line(f"start - {self.tcursor.start}", diag, 2)
+            self.add_line(f"end - {self.tcursor.end}", diag, 3)
 
     def on_input(self, ch):
         if ch == CTRL + "q":
@@ -237,11 +307,11 @@ class TUICSV(TUI):
             self.save()
             return
         if ch == CTRL + "r":
-            self.load()
+            self.load_file()
             return
 
         with self.error_logging("nav"):
-            # simple arrow
+            # arrow navigation
             if ch == Keys.UP:
                 self.tcursor.up(self.lines)
             elif ch == Keys.DOWN:
@@ -250,6 +320,30 @@ class TUICSV(TUI):
                 self.tcursor.left(self.lines)
             elif ch == Keys.RIGHT:
                 self.tcursor.right(self.lines)
+            elif ch == Keys.HOME:
+                if self.tcursor.is_selection():
+                    self.tcursor.collapse_to_selstart()
+                self.tcursor.start.cx = 0
+                self.tcursor.end.cx = 0
+            elif ch == Keys.END:
+                if self.tcursor.is_selection():
+                    self.tcursor.collapse_to_selend()
+                self.tcursor.start.cx = len(self.lines[self.cy])
+                self.tcursor.end.cx = len(self.lines[self.cy])
+            elif ch == CTRL + Keys.LEFT:
+                self.cursor_regulate()
+                self.tcursor.left(self.lines)
+                if not self.tcursor.is_selection():
+                    # TODO this logic is lacking
+                    while self.cx > 0 and self.lines[self.cy][self.cx - 1].isalpha():
+                        self.tcursor.left(self.lines)
+            elif ch == CTRL + Keys.RIGHT:
+                self.cursor_regulate()
+                self.tcursor.right(self.lines)
+                if not self.tcursor.is_selection():
+                    # TODO this logic is lacking
+                    while self.cx <= len(self.cline) and self.lines[self.cy][self.cx].isalpha():
+                        self.tcursor.right(self.lines)
 
             # selection changing
             elif ch == SHIFT + Keys.UP:
@@ -261,7 +355,9 @@ class TUICSV(TUI):
             elif ch == SHIFT + Keys.RIGHT:
                 self.tcursor.end.right(self.lines)
 
-            elif ch == ALT + Keys.UP and not self.tcursor.is_selection() and self.tcursor.end.cy > 0:
+        with self.error_logging("editing"):
+            # editing
+            if ch == ALT + Keys.UP and not self.tcursor.is_selection() and self.tcursor.end.cy > 0:
                 x = self.tcursor.end.cy
                 self.lines[x], self.lines[x - 1] = self.lines[x - 1], self.lines[x]
                 self.tcursor.up(self.lines)
@@ -303,8 +399,42 @@ class TUICSV(TUI):
                 self.lines[self.cy] = pre
                 self.lines.insert(self.cy + 1, post)
                 self.tcursor.down(self.lines)
-            elif ch == CTRL + Keys.LEFT:
-                self.cursor_regulate()
+            elif ch == CTRL + "c":
+                if self.tcursor.is_selection():
+                    text = self.tcursor.get_selection_text(self.lines)
+                else:
+                    text = self.lines[self.cy]
+                text = text.encode()
+                encoded = base64.b64encode(text).decode()
+                sys.stdout.write(f"\x1b]52;c;{encoded}\007")
+                sys.stdout.flush()
+            elif ch == CTRL + "x":
+                if self.tcursor.is_selection():
+                    text = self.tcursor.get_selection_text(self.lines)
+                    self.tcursor.empty_selection(self.lines)
+                else:
+                    text = self.lines[self.cy]
+                    if len(self.lines) > 0:
+                        self.lines.pop(self.cy)
+                    else:
+                        self.lines = [""]
+
+                    if self.cy >= self.nlines:
+                        self.tcursor.up(self.lines)
+                text = text.encode()
+                encoded = base64.b64encode(text).decode()
+                sys.stdout.write(f"\x1b]52;c;{encoded}\007")
+                sys.stdout.flush()
+            elif ch == ALT + SHIFT + Keys.UP and not self.tcursor.is_selection():
+                self.lines.insert(self.cy, self.lines[self.cy])
+            elif ch == ALT + SHIFT + Keys.DOWN and not self.tcursor.is_selection():
+                self.lines.insert(self.cy, self.lines[self.cy])
+                self.tcursor.down(self.lines)
+            elif ch == CTRL + "a":
+                self.tcursor.start.cy = 0
+                self.tcursor.start.cx = 0
+                self.tcursor.end.cy = len(self.lines) - 1
+                self.tcursor.end.cx = len(self.lines[-1])
 
         # check if cursor is on screen
         if self.cy < self.scroll:
@@ -314,6 +444,9 @@ class TUICSV(TUI):
 
 
 if __name__ == "__main__":
-    # app = TUICSV("ignore/t.json")
-    app = TUICSV("ignore/text.csv")
+    if len(sys.argv) != 2:
+        print("Expected one argument")
+        exit(1)
+
+    app = TUICSV(sys.argv[1])
     app.mainLoop()

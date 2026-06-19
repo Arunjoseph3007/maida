@@ -405,7 +405,7 @@ class KeyEvent:
         raise Exception(f"Cannot add {type(value)} with {type(self)}")
 
     def isprintable(self):
-        return type(self.key) == str and self.key.isprintable()
+        return type(self.key) == str and self.key.isprintable() and not self.alt and not self.ctrl and not self.shift
 
     @staticmethod
     def init(key: str) -> KeyEvent:
@@ -916,7 +916,7 @@ class TUI(abc.ABC):
                         if ch == "\x1b[1;":
                             ch += os.read(fd, 2).decode()
                             return ch
-                        
+
                     # delete key
                     elif ch == "\x1b[3":
                         ch += os.read(fd, 1).decode()
@@ -1022,14 +1022,14 @@ def toggle(tui: TUI, box: Box, title: str, selected: bool) -> bool:
     return selected
 
 
-def button(tui: TUI, box: Box, title: str, *, disabled=False) -> bool:
+def button(tui: TUI, box: Box, title: str, *, disabled=False, align=TextAlign.CENTER) -> bool:
     effect = None
     if tui.hovering(box):
         effect = gray_bg
     if disabled:
         effect = dim
 
-    tui.add_line(title, box, 0, align=TextAlign.CENTER, effect=effect)
+    tui.add_line(title, box, 0, align=align, effect=effect)
     return not disabled and tui.clicking(box)
 
 
