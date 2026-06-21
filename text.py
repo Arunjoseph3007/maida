@@ -256,15 +256,16 @@ class TUICSV(TUI):
         path = pathlib.Path(name)
         self.load_path(path)
 
-        self.commands = {
-            "uppercase": lambda: self.apply_on_selection(str.upper),
-            "lowercase": lambda: self.apply_on_selection(str.lower),
-            "capitalize": lambda: self.apply_on_selection(str.capitalize),
-            "swapcase": lambda: self.apply_on_selection(str.swapcase),
-            "titlecase": lambda: self.apply_on_selection(str.title),
-        }
+        self.commands = [
+            {"name": "uppercase", "func": lambda: self.apply_on_selection(str.upper)},
+            {"name": "lowercase", "func": lambda: self.apply_on_selection(str.lower)},
+            {"name": "capitalize", "func": lambda: self.apply_on_selection(str.capitalize)},
+            {"name": "swapcase", "func": lambda: self.apply_on_selection(str.swapcase)},
+            {"name": "titlecase", "func": lambda: self.apply_on_selection(str.title)},
+        ]
         self.command_pallete_open = False
         self.command_inp = InputWG("command_query")
+        self.command_sel_index = -1
 
     def apply_on_selection(self, fn):
         if not self.tcursor.is_selection():
@@ -316,6 +317,10 @@ class TUICSV(TUI):
         except Exception:
             self.lwarn(f"Error when reading file {path}, File might be binary")
 
+    @property
+    def filtered_commands(self):
+        return [x for x in self.commands if self.command_inp.value in x["name"]]
+
     def save(self):
         if not self.file:
             return
@@ -336,7 +341,7 @@ class TUICSV(TUI):
 
     @property
     def cline(self):
-        return self.lines[self.tcursor.start.cy]
+        return self.lines[self.tcursor.end.cy]
 
     def cursor_regulate(self):
         self.tcursor.start.cursor_regulate(self.lines)
@@ -461,16 +466,21 @@ class TUICSV(TUI):
                 self.add_line("Command Pallete", palleteb, next(ln), align=TextAlign.CENTER, effect=pale_yellow)
 
                 rest = palleteb.pad(top=2)
-                inputb, rest = rest.top(4)
+                inputb, rest = rest.top(3)
                 self.mount(self.command_inp, inputb.pad(x=1))
 
-                for k, cmd in self.commands.items():
-                    if self.command_inp.value in k:
-                        b, rest = rest.top(1)
-                        if button(self, b, k, align=TextAlign.LEFT):
-                            with self.transaction():
-                                cmd()
-                            self.command_pallete_open = False
+                for cmd_i, cmd in enumerate(self.filtered_commands):
+                    b, rest = rest.top(1)
+                    hovering = self.hovering(b)
+                    clicking = self.clicking(b)
+                    eff = self.command_sel_index == cmd_i and gray_bg
+                    self.add_line(cmd["name"], b, 0, effect=eff)
+                    if clicking:
+                        with self.transaction():
+                            cmd["func"]()
+                        self.command_pallete_open = False
+                    elif hovering:
+                        self.command_sel_index = cmd_i
 
         # diag
         if self.display_diagnostics:
@@ -491,9 +501,29 @@ class TUICSV(TUI):
 
         if ch == CTRL + "l":
             self.command_pallete_open = not self.command_pallete_open
+            if self.command_pallete_open:
+                self.command_inp.focused = True
+                self.command_inp.value = ""
+                self.command_inp.curs = 0
+                self.command_sel_index = -1
         if self.command_pallete_open:
             if ch == ESC:
                 self.command_pallete_open = False
+            elif ch == Keys.UP:
+                self.command_sel_index -= 1
+                if self.command_sel_index < 0:
+                    self.command_sel_index = len(self.filtered_commands) - 1
+            elif ch == Keys.DOWN:
+                self.command_sel_index += 1
+                if self.command_sel_index >= len(self.filtered_commands):
+                    self.command_sel_index = 0
+            elif ch == Keys.ENTER:
+                with self.error_logging("cmd"):
+                    with self.transaction():
+                        self.filtered_commands[self.command_sel_index]["func"]()
+                    self.command_pallete_open = False
+            elif ch.isprintable():
+                self.command_sel_index = -1
             return
 
         if ch == CTRL + "s":
@@ -549,6 +579,12 @@ class TUICSV(TUI):
                 self.tcursor.end.right(self.lines)
                 while self.cx <= len(self.cline) and self.lines[self.cy][self.cx].isalpha():
                     self.tcursor.end.right(self.lines)
+            elif ch == SHIFT + Keys.END:
+                self.cursor_regulate()
+                self.tcursor.end.cx = len(self.lines[self.cy])
+            elif ch == SHIFT + Keys.HOME:
+                self.cursor_regulate()
+                self.tcursor.end.cx = 0
 
             # selection changing
             elif ch == SHIFT + Keys.UP:
