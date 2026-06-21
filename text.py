@@ -256,6 +256,30 @@ class TUICSV(TUI):
         path = pathlib.Path(name)
         self.load_path(path)
 
+        self.commands = {
+            "uppercase": lambda: self.apply_on_selection(str.upper),
+            "lowercase": lambda: self.apply_on_selection(str.lower),
+            "capitalize": lambda: self.apply_on_selection(str.capitalize),
+            "swapcase": lambda: self.apply_on_selection(str.swapcase),
+            "titlecase": lambda: self.apply_on_selection(str.title),
+        }
+        self.command_pallete_open = False
+        self.command_inp = InputWG("command_query")
+
+    def apply_on_selection(self, fn):
+        if not self.tcursor.is_selection():
+            return
+        self.cursor_regulate()
+        sx, sy = self.tcursor.sel_start
+        ex, ey = self.tcursor.sel_end
+        if sy == ey:
+            self.lines[sy] = self.lines[sy][:sx] + fn(self.lines[sy][sx:ex]) + self.lines[sy][ex:]
+        else:
+            self.lines[sy] = self.lines[sy][:sx] + fn(self.lines[sy][sx:])
+            self.lines[ey] = fn(self.lines[ey][:ex]) + self.lines[ey][ex:]
+            for y in range(sy + 1, ey):
+                self.lines[y] = fn(self.lines[y])
+
     def load_path(self, path: pathlib.Path):
         if not path.exists():
             self.lerror(f"Path {path} does not exist")
@@ -379,65 +403,99 @@ class TUICSV(TUI):
         self.box_height = box.pad(1).h
 
         # File tree
-        rest = ftree_box.pad(top=1)
+        with self.error_logging("file_tree"):
+            rest = ftree_box.pad(top=1)
 
-        fteb, rest = rest.top(1)
-        if button(self, fteb, "  ..", align=TextAlign.LEFT):
-            path = pathlib.Path(self.dir or self.file).parent
-            self.load_path(path)
+            fteb, rest = rest.top(1)
+            if button(self, fteb, "  ..", align=TextAlign.LEFT):
+                path = pathlib.Path(self.dir or self.file).parent
+                self.load_path(path)
 
-        if self.dir:
-            for entry in self.ftree:
-                fteb, rest = rest.top(1)
-                label = "❯ " if entry.is_dir() else "  "
-                label += entry.name
-                if button(self, fteb, label, align=TextAlign.LEFT):
-                    path = pathlib.Path(self.dir) / pathlib.Path(entry.name)
-                    self.load_path(path)
+            if self.dir:
+                for entry in self.ftree:
+                    fteb, rest = rest.top(1)
+                    label = "❯ " if entry.is_dir() else "  "
+                    label += entry.name
+                    if button(self, fteb, label, align=TextAlign.LEFT):
+                        path = pathlib.Path(self.dir) / pathlib.Path(entry.name)
+                        self.load_path(path)
 
         # editor
-        line_no_space = len(str(self.nlines))
+        with self.error_logging("editor"):
+            line_no_space = len(str(self.nlines))
 
-        cx, cy = self.tcursor.end.pair()
-        cx = min(cx, len(self.cline))
-        cy = cy - self.scroll
-        cx, cy = box.at(cx, cy)
-        self.cursor_loc = [cx + line_no_space + 2, cy + 1]
+            cx, cy = self.tcursor.end.pair()
+            cx = min(cx, len(self.cline))
+            cy = cy - self.scroll
+            cx, cy = box.at(cx, cy)
+            self.cursor_loc = [cx + line_no_space + 2, cy + 1]
 
-        lineno = self.scroll
-        for i, line in enumerate(self.lines[self.scroll :]):
-            lnt = dim(str(lineno + 1).ljust(line_no_space))
-            ltext = f"{lnt} {line}"
-            sel_eff = lambda x: gray_bg(dim(x))
-            if self.tcursor.is_selection():
-                sx, sy = self.tcursor.sel_start
-                ex, ey = self.tcursor.sel_end
-                if sy == ey == lineno:
-                    ltext = f"{lnt} {line[:sx]}{sel_eff(line[sx:ex])}{line[ex:]}"
-                elif lineno == sy:
-                    ltext = f"{lnt} {line[:sx]}{sel_eff(line[sx:])}"
-                elif lineno == ey:
-                    ltext = f"{lnt} {sel_eff(line[:ex])}{line[ex:]}"
-                elif ey > lineno > sy:
-                    ltext = f"{lnt} {sel_eff(line)}"
+            lineno = self.scroll
+            for i, line in enumerate(self.lines[self.scroll :]):
+                lnt = dim(str(lineno + 1).ljust(line_no_space))
+                ltext = f"{lnt} {line}"
+                sel_eff = lambda x: gray_bg(dim(x))
+                if self.tcursor.is_selection():
+                    sx, sy = self.tcursor.sel_start
+                    ex, ey = self.tcursor.sel_end
+                    if sy == ey == lineno:
+                        ltext = f"{lnt} {line[:sx]}{sel_eff(line[sx:ex])}{line[ex:]}"
+                    elif lineno == sy:
+                        ltext = f"{lnt} {line[:sx]}{sel_eff(line[sx:])}"
+                    elif lineno == ey:
+                        ltext = f"{lnt} {sel_eff(line[:ex])}{line[ex:]}"
+                    elif ey > lineno > sy:
+                        ltext = f"{lnt} {sel_eff(line)}"
 
-            self.blit_text_to_box(ltext, box, 1, 1 + i)
-            lineno += 1
+                self.blit_text_to_box(ltext, box, 1, 1 + i)
+                lineno += 1
 
+        # command pallete
+        if self.command_pallete_open:
+            with self.error_logging("pallete"):
+                palleteb = self.box.centered(80, 20)
+                self.clean_box(palleteb)
+                self.draw_box(palleteb)
+
+                ln = next_line(1)
+                self.add_line("Command Pallete", palleteb, next(ln), align=TextAlign.CENTER, effect=pale_yellow)
+
+                rest = palleteb.pad(top=2)
+                inputb, rest = rest.top(4)
+                self.mount(self.command_inp, inputb.pad(x=1))
+
+                for k, cmd in self.commands.items():
+                    if self.command_inp.value in k:
+                        b, rest = rest.top(1)
+                        if button(self, b, k, align=TextAlign.LEFT):
+                            with self.transaction():
+                                cmd()
+                            self.command_pallete_open = False
+
+        # diag
         if self.display_diagnostics:
-            diag = box.bottom_right(30, 10)
-            ln = next_line(1)
-            self.draw_box(diag)
-            self.add_line(f"is sel - {self.tcursor.is_selection()}", diag, next(ln))
-            self.add_line(f"start - {self.tcursor.start}", diag, next(ln))
-            self.add_line(f"end - {self.tcursor.end}", diag, next(ln))
-            self.add_line(f"Undo len - {len(self.undo_stack)}", diag, next(ln))
-            self.add_line(f"Redo len - {len(self.redo_stack)}", diag, next(ln))
+            with self.error_logging("diag"):
+                diag = box.bottom_right(30, 10)
+                ln = next_line(1)
+                self.draw_box(diag)
+                self.add_line(f"is sel - {self.tcursor.is_selection()}", diag, next(ln))
+                self.add_line(f"start - {self.tcursor.start}", diag, next(ln))
+                self.add_line(f"end - {self.tcursor.end}", diag, next(ln))
+                self.add_line(f"Undo len - {len(self.undo_stack)}", diag, next(ln))
+                self.add_line(f"Redo len - {len(self.redo_stack)}", diag, next(ln))
 
     def on_input(self, ch):
         if ch == CTRL + "q":
             self.shutdown()
             return
+
+        if ch == CTRL + "l":
+            self.command_pallete_open = not self.command_pallete_open
+        if self.command_pallete_open:
+            if ch == ESC:
+                self.command_pallete_open = False
+            return
+
         if ch == CTRL + "s":
             self.save()
             return

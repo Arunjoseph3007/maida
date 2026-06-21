@@ -405,7 +405,14 @@ class KeyEvent:
         raise Exception(f"Cannot add {type(value)} with {type(self)}")
 
     def isprintable(self):
-        return type(self.key) == str and self.key.isprintable() and not self.alt and not self.ctrl and not self.shift
+        return (
+            self.key
+            and type(self.key) == str
+            and self.key.isprintable()
+            and not self.alt
+            and not self.ctrl
+            and not self.shift
+        )
 
     @staticmethod
     def init(key: str) -> KeyEvent:
@@ -597,6 +604,8 @@ class TUI(abc.ABC):
             self.render()
 
     def start_rendering(self):
+        if self.started_rendering:
+            return
         self.tty_in = open("/dev/tty", "r")
         self.tty_out = open("/dev/tty", "w")
 
@@ -623,6 +632,7 @@ class TUI(abc.ABC):
         self.mouse.reset()
 
         ch = self.get_char(timeout=1 / self.fps)
+        self.wrapped_render()
         if ch:
             if CTRL + "d" == ch:
                 self.display_diagnostics = not self.display_diagnostics
@@ -632,9 +642,8 @@ class TUI(abc.ABC):
 
             with self.error_logging("loop"):
                 for w in self.widgets:
-                    w.on_input(self, ch)
+                    w.on_input(self, ke)
 
-        self.wrapped_render()
         self.print_to_screen()
 
     def mainLoop(self):
@@ -1049,12 +1058,9 @@ class InputWG(Widget):
         self.focused = False
         self.curs = 0
         self.value = ""
-        self.box: Box = None
         self.title = title
 
     def render(self, tui: TUI, box: Box):
-        self.box = box
-
         col = pale_yellow
         if self.focused:
             col = red
@@ -1067,6 +1073,10 @@ class InputWG(Widget):
         elif tui.clicking(tui.box):
             self.focused = False
 
+        if self.focused:
+            cx, cy = box.at(self.curs + 1, 1)
+            tui.cursor_loc = [cx, cy]
+
     def on_input(self, tui: TUI, ch: str):
         if not self.focused:
             return
@@ -1075,10 +1085,6 @@ class InputWG(Widget):
             self.focused = False
             return
         self.value, self.curs, _ = write(self.value, self.curs, ch)
-
-        if self.box:
-            cx, cy = self.box.at(self.curs + 1, 1)
-            tui.cursor_loc = [cx, cy]
 
 
 def write(text: str, cursor: int, ch: KeyEvent) -> Tuple[str, int, bool]:
@@ -1093,7 +1099,7 @@ def write(text: str, cursor: int, ch: KeyEvent) -> Tuple[str, int, bool]:
     elif ch == Keys.LEFT:
         if cursor > 0:
             cursor -= 1
-    elif type(ch.key) == str and ch.key.isprintable():
+    elif ch.isprintable():
         text = text[:cursor] + ch.key + text[cursor:]
         cursor += 1
     else:
