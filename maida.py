@@ -247,14 +247,14 @@ class Mouse:
         self.y = 0
 
         self.pixel = [0, 0]
+        self.updated = False
 
         self.left_down = False
         self.right_down = False
         self.state = None
 
     def reset(self):
-        self.left_down = False
-        self.right_down = False
+        self.updated = False
 
     @property
     def pos(self):
@@ -265,12 +265,14 @@ class Mouse:
         return self.left_down
 
     def normal_update(self, evt: bytes):
+        self.updated = True
         self.state = evt[0]
         self.left_down = str(evt[0]) == "32"
         self.x = evt[1] - 32
         self.y = evt[2] - 32
 
     def sgr_update(self, evt: str):
+        self.updated = True
         state, col, row = evt[:-1].split(";")
         self.state = int(state)
         if state == "0":
@@ -281,6 +283,7 @@ class Mouse:
         self.y = int(row) - 1
 
     def sgr_pixel_update(self, evt: str):
+        self.updated = True
         state, col, row = evt[:-1].split(";")
         self.state = int(state)
         if state == "0":
@@ -945,10 +948,10 @@ class TUI(abc.ABC):
         return box.within(*self.mouse.pos) and self.oldz_match()
 
     def clicking(self, box: Box):
-        return self.mouse.down and box.within(*self.mouse.pos) and self.oldz_match()
+        return self.mouse.updated and self.mouse.down and box.within(*self.mouse.pos) and self.oldz_match()
 
     def right_clicking(self, box: Box):
-        return self.mouse.right_down and box.within(*self.mouse.pos) and self.oldz_match()
+        return self.mouse.updated and self.mouse.right_down and box.within(*self.mouse.pos) and self.oldz_match()
 
     def get_screen_pos(self, cx, cy):
         cw, ch = self.width, self.height

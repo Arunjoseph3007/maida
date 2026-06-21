@@ -479,7 +479,7 @@ class TUICSV(TUI):
                         with self.transaction():
                             cmd["func"]()
                         self.command_pallete_open = False
-                    elif hovering:
+                    elif self.mouse.updated and hovering:
                         self.command_sel_index = cmd_i
 
         # diag
@@ -518,10 +518,9 @@ class TUICSV(TUI):
                 if self.command_sel_index >= len(self.filtered_commands):
                     self.command_sel_index = 0
             elif ch == Keys.ENTER:
-                with self.error_logging("cmd"):
-                    with self.transaction():
-                        self.filtered_commands[self.command_sel_index]["func"]()
-                    self.command_pallete_open = False
+                with self.transaction():
+                    self.filtered_commands[self.command_sel_index]["func"]()
+                self.command_pallete_open = False
             elif ch.isprintable():
                 self.command_sel_index = -1
             return
