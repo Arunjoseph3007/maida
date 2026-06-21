@@ -89,6 +89,11 @@ class Cursor:
         self.start = Anchor()
         self.end = Anchor()
 
+    def __str__(self):
+        if self.is_selection():
+            return f"Cursor({self.start}, {self.end})"
+        return f"Cursor({self.start})"
+
     def is_selection(self):
         return self.start != self.end
 
@@ -474,9 +479,18 @@ class TUICSV(TUI):
                 self.cursor_regulate()
                 self.tcursor.right(self.lines)
                 if not self.tcursor.is_selection():
-                    # TODO this logic is lacking
                     while self.cx <= len(self.cline) and self.lines[self.cy][self.cx].isalpha():
                         self.tcursor.right(self.lines)
+            elif ch == CTRL + SHIFT + Keys.LEFT:
+                self.cursor_regulate()
+                self.tcursor.end.left(self.lines)
+                while self.cx > 0 and self.lines[self.cy][self.cx - 1].isalpha():
+                    self.tcursor.end.left(self.lines)
+            elif ch == CTRL + SHIFT + Keys.RIGHT:
+                self.cursor_regulate()
+                self.tcursor.end.right(self.lines)
+                while self.cx <= len(self.cline) and self.lines[self.cy][self.cx].isalpha():
+                    self.tcursor.end.right(self.lines)
 
             # selection changing
             elif ch == SHIFT + Keys.UP:
@@ -512,7 +526,8 @@ class TUICSV(TUI):
                         self.tcursor.empty_selection(self.lines)
                     elif self.cx > 0:
                         self.lines[self.cy] = self.lines[self.cy][: self.cx - 1] + self.lines[self.cy][self.cx :]
-                        self.tcursor.left(self.lines)
+                        self.tcursor.start.cx -= 1
+                        self.tcursor.end.cx -= 1
                     elif self.cy > 0:
                         self.tcursor.left(self.lines)
                         self.lines[self.cy] += self.lines.pop(self.cy + 1)
@@ -583,9 +598,9 @@ class TUICSV(TUI):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Expected one argument")
-        exit(1)
+    name = "."
+    if len(sys.argv) == 2:
+        name = sys.argv[1]
 
-    app = TUICSV(sys.argv[1])
+    app = TUICSV(name)
     app.mainLoop()

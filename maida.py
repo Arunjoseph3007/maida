@@ -610,6 +610,7 @@ class TUI(abc.ABC):
         self.tty_out.flush()
         signal.signal(signal.SIGWINCH, self.handle_resize)
         signal.signal(signal.SIGINT, self.handle_exit)
+        signal.signal(signal.SIGTSTP, signal.SIG_IGN)
 
         self.wrapped_render()
         self.print_to_screen()
