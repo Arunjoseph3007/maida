@@ -4,6 +4,7 @@ from typing import List
 from contextlib import contextmanager
 import base64
 import pathlib
+import re
 import os
 import sys
 
@@ -238,6 +239,155 @@ class Edit:
 
 Histroy = List[Edit]
 MAX_UNDO_HISTORY_SIZE = 100
+
+
+class TokenTypes(enum.StrEnum):
+    WHITESPACE = enum.auto()
+    COMMENT = enum.auto()
+    CONTROL = enum.auto()
+    DECLARATION = enum.auto()
+    CONTEXT = enum.auto()
+    LITERAL = enum.auto()
+    STRING = enum.auto()
+    NUMERIC = enum.auto()
+    OPERATOR = enum.auto()
+    VARIABLE = enum.auto()
+    PUNCTUATION = enum.auto()
+
+
+@dataclass
+class GrammarRule:
+    name: TokenTypes
+    start_match: str
+    end_match: str | None = None
+
+    def is_region_based(self):
+        return self.end_match is not None
+
+
+@dataclass
+class GrammarMatch:
+    start: int
+    end: int
+    line: int
+    matched_class: str
+
+
+class Grammar:
+    patterns: List[GrammarRule]
+
+    def __init__(self):
+        self.patterns = []
+
+    def add_rule(self, name, start, end=None):
+        self.patterns.append(GrammarRule(name, start, end))
+
+    def parse_text_buffer(self, tb: list[str]) -> list[GrammarMatch]:
+        result = []
+        line_no = 0
+
+        while line_no < len(tb):
+            i = 0
+            while i < len(tb[line_no]):
+                c = tb[line_no][i]
+
+                # Ignore whitespace
+                if c in (" ", "\r", "\t"):
+                    result.append(GrammarMatch(start=i, end=i + 1, matched_class=TokenTypes.WHITESPACE, line=line_no))
+                    i += 1
+                    continue
+
+                found = False
+                for rule in self.patterns:
+
+                    # Region-based matching
+                    if rule.is_region_based():
+                        start_m = re.match(rule.start_match, tb[line_no][i:])
+                        if start_m:
+                            found = True
+                            start = i
+                            i += len(start_m.group(0))
+
+                            end_m = re.search(rule.end_match, tb[line_no][i:])
+                            if end_m:
+                                # End found on the same line
+                                end = i + end_m.end()
+                                result.append(GrammarMatch(start=start, end=end, matched_class=rule.name, line=line_no))
+                                i = end
+                            else:
+                                # End not on the same line — span across lines
+                                result.append(
+                                    GrammarMatch(start=start, end=len(tb[line_no]), matched_class=rule.name, line=line_no)
+                                )
+                                line_no += 1
+
+                                while line_no < len(tb):
+                                    end_m = re.search(rule.end_match, tb[line_no])
+                                    if end_m:
+                                        break
+                                    result.append(
+                                        GrammarMatch(start=0, end=len(tb[line_no]), matched_class=rule.name, line=line_no)
+                                    )
+                                    line_no += 1
+
+                                if line_no < len(tb):
+                                    end = end_m.end()
+                                    result.append(GrammarMatch(start=0, end=end, matched_class=rule.name, line=line_no))
+                                    i = end
+
+                            break
+
+                    # Token-based matching
+                    else:
+                        match = re.match(rule.start_match, tb[line_no][i:])
+                        if match:
+                            found = True
+                            end = i + len(match.group(0))
+                            result.append(GrammarMatch(start=i, end=end, matched_class=rule.name, line=line_no))
+                            i = end
+                            break
+
+                if not found:
+                    i += 1
+
+            line_no += 1
+
+        return result
+
+
+def simpleJsGrammar():
+    js = Grammar()
+
+    js.add_rule(TokenTypes.COMMENT, r"\/\/.*")
+    js.add_rule(TokenTypes.COMMENT, r"\/\*", r"\*\/")
+
+    js.add_rule(
+        TokenTypes.CONTROL,
+        r"\b(break|case|catch|continue|default|do|else|finally|for|if|return|switch|throw|try|while|with)\b",
+    )
+    js.add_rule(TokenTypes.DECLARATION, r"\b(var|let|const|function|class)\b")
+    js.add_rule(TokenTypes.CONTEXT, r"\b(this|super|new|delete|typeof|void|yield|await|import|export)\b")
+    js.add_rule(TokenTypes.LITERAL, r"\b(true|false|null)\b")
+
+    js.add_rule(TokenTypes.STRING, r"\"", r"\"")
+    js.add_rule(TokenTypes.STRING, r"'", r"'")
+    js.add_rule(TokenTypes.STRING, r"`", r"`")
+
+    js.add_rule(
+        TokenTypes.NUMERIC,
+        r"\b(?:0[bB][01]+|0[oO][0-7]+|0[xX][\dA-Fa-f]+|\d+(\.\d+)?([eE][+-]?\d+)?|\.\d+([eE][+-]?\d+)?)\b",
+    )
+    js.add_rule(
+        TokenTypes.OPERATOR,
+        r"(\+\+|--|===|==|!==|!=|<=|>=|<|>|\+=|-=|\*=|\/=|%=|\*\*|&&|\|\||!|=|\+|-|\*|\/|%|\*\*=|&=|\|=|\^=|<<=|>>=|>>>=|&|\||\^|~|<<|>>|>>>|\?|:|=>)",
+    )
+    js.add_rule(TokenTypes.VARIABLE, r"\b[a-zA-Z_$][a-zA-Z0-9_$]*\b")
+    js.add_rule(TokenTypes.PUNCTUATION, r"[.,;()[\]{}]")
+
+    return js
+
+
+js_grammar = simpleJsGrammar()
 
 
 class TUICSV(TUI):
