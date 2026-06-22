@@ -428,16 +428,25 @@ class KeyEvent:
             "F": Keys.END,
         }
 
-        if len(key) == 6 and key.startswith(CSI + "1;"):
-            key_iden = key[-1]
-            modifier = int(key[-2]) - 1
+        if len(key) == 6:
+            if key.startswith(CSI + "1;"):
+                key_iden = key[-1]
+                modifier = int(key[-2]) - 1
 
-            shift = (modifier >> 0) & 1
-            alt = (modifier >> 1) & 1
-            ctrl = (modifier >> 2) & 1
+                shift = (modifier >> 0) & 1
+                alt = (modifier >> 1) & 1
+                ctrl = (modifier >> 2) & 1
 
-            if key_iden in special_key_mappings:
-                return KeyEvent(special_key_mappings[key_iden], ctrl=ctrl, alt=alt, shift=shift)
+                if key_iden in special_key_mappings:
+                    return KeyEvent(special_key_mappings[key_iden], ctrl=ctrl, alt=alt, shift=shift)
+            if key.startswith(CSI + "3;") and key.endswith("~"):
+                modifier = int(key[-2]) - 1
+
+                shift = (modifier >> 0) & 1
+                alt = (modifier >> 1) & 1
+                ctrl = (modifier >> 2) & 1
+
+                return KeyEvent(Keys.DEL, ctrl=ctrl, shift=shift, alt=alt)
 
         if len(key) == 4:
             if key == CSI + "3~":
@@ -457,6 +466,9 @@ class KeyEvent:
         if len(key) == 1:
             if key.isprintable():
                 return KeyEvent(key)
+
+            if key == "\x08":
+                return CTRL + Keys.BACKSPACE
 
             mappings = {
                 "\x7f": Keys.BACKSPACE,
@@ -935,6 +947,10 @@ class TUI(abc.ABC):
                         ch += os.read(fd, 1).decode()
                         if ch == "\x1b[3~":
                             return ch
+                        if ch == "\x1b[3;":
+                            ch += os.read(fd, 2).decode()
+                            return ch
+
             return ch
         return None
 

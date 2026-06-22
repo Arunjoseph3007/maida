@@ -401,6 +401,27 @@ class TUICSV(TUI):
         ed.redo(self.lines)
         self.tcursor = ed.end_cursor
 
+    def backspace(self):
+        self.cursor_regulate()
+        if self.tcursor.is_selection():
+            self.tcursor.empty_selection(self.lines)
+        elif self.cx > 0:
+            self.lines[self.cy] = self.lines[self.cy][: self.cx - 1] + self.lines[self.cy][self.cx :]
+            self.tcursor.start.cx -= 1
+            self.tcursor.end.cx -= 1
+        elif self.cy > 0:
+            self.tcursor.left(self.lines)
+            self.lines[self.cy] += self.lines.pop(self.cy + 1)
+
+    def delete(self):
+        self.cursor_regulate()
+        if self.tcursor.is_selection():
+            self.tcursor.empty_selection(self.lines)
+        elif self.cx < len(self.cline):
+            self.lines[self.cy] = self.lines[self.cy][: self.cx] + self.lines[self.cy][self.cx + 1 :]
+        elif self.cy < self.nlines - 1:
+            self.lines[self.cy] += self.lines.pop(self.cy + 1)
+
     def render(self):
         ftree_box, box = self.box.left(30)
         self.draw_box(ftree_box)
@@ -614,24 +635,21 @@ class TUICSV(TUI):
                     self.lines[self.cy] = self.lines[self.cy][: self.cx] + ch.key + self.lines[self.cy][self.cx :]
                     self.tcursor.right(self.lines)
                 elif ch == Keys.BACKSPACE:
+                    self.backspace()
+                elif ch == CTRL + Keys.BACKSPACE:
                     self.cursor_regulate()
-                    if self.tcursor.is_selection():
-                        self.tcursor.empty_selection(self.lines)
-                    elif self.cx > 0:
-                        self.lines[self.cy] = self.lines[self.cy][: self.cx - 1] + self.lines[self.cy][self.cx :]
-                        self.tcursor.start.cx -= 1
-                        self.tcursor.end.cx -= 1
-                    elif self.cy > 0:
-                        self.tcursor.left(self.lines)
-                        self.lines[self.cy] += self.lines.pop(self.cy + 1)
+                    self.backspace()
+                    if not self.tcursor.is_selection():
+                        while self.cx > 0 and self.lines[self.cy][self.cx - 1].isalpha():
+                            self.backspace()
                 elif ch == Keys.DEL:
+                    self.delete()
+                elif ch == CTRL + Keys.DEL:
                     self.cursor_regulate()
-                    if self.tcursor.is_selection():
-                        self.tcursor.empty_selection(self.lines)
-                    elif self.cx < len(self.cline):
-                        self.lines[self.cy] = self.lines[self.cy][: self.cx] + self.lines[self.cy][self.cx + 1 :]
-                    elif self.cy < self.nlines - 1:
-                        self.lines[self.cy] += self.lines.pop(self.cy + 1)
+                    self.delete()
+                    if not self.tcursor.is_selection():
+                        while self.cx <= len(self.cline) and self.lines[self.cy][self.cx].isalpha():
+                            self.delete()
                 elif ch == Keys.ENTER:
                     self.cursor_regulate()
                     if self.tcursor.is_selection():
@@ -690,6 +708,7 @@ class TUICSV(TUI):
             self.scroll = self.cy - self.box_height + 1
 
 
+app = TUICSV(".")
 if __name__ == "__main__":
     name = "."
     if len(sys.argv) == 2:
