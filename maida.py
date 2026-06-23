@@ -28,9 +28,9 @@ def clamp(n: int, minn: int, maxn: int):
     return n
 
 
-@dataclass
 class ansi:
-    code: str
+    def __init__(self, code: str):
+        self.code = code
 
     def __call__(self, text: str):
         return self.code + text + ANSIParser.RESET
@@ -57,13 +57,10 @@ def rgb_bg(r: int, g: int, b: int):
     return ansi(f"\x1b[48;2;{r};{g};{b}m")
 
 
-def noop(arg):
-    return arg
-
-
 ESC = "\x1b"
 CSI = "\x1b["
 
+noop = ansi("")
 dim = ansi(f"{CSI}2m")
 dim_bg = ansi(f"{CSI}48;100;100;100;Bm")
 blink = ansi(f"{CSI}5m")
@@ -751,21 +748,21 @@ class TUI(abc.ABC):
 
         lines = text.splitlines()
 
-        ansi = ANSIParser()
-        ansi.ingest("\n".join(lines[:scrolly]))
+        ansi_parser = ANSIParser()
+        ansi_parser.ingest("\n".join(lines[:scrolly]))
 
         lines = lines[scrolly : scrolly + box.h + 1]
         for y, line in enumerate(lines):
             x = 0
             i = 0
-            prefix = ansi.state_code
+            prefix = ansi_parser.state_code
             while i < len(line):
                 m = ANSIParser.RE.match(line, i)
                 row = y + yo
                 col = x + xo - scrollx
                 if m:
-                    ansi.update(m.group())
-                    prefix = ansi.state_code
+                    ansi_parser.update(m.group())
+                    prefix = ansi_parser.state_code
                     i = m.end()
                 else:
                     iswidechar = is_widechar(line[i])

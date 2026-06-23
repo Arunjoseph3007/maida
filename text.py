@@ -288,9 +288,11 @@ class GrammarMatch:
 
 class Grammar:
     patterns: List[GrammarRule]
+    name: str
 
-    def __init__(self):
+    def __init__(self, name: str):
         self.patterns = []
+        self.name = name
 
     def add_rule(self, name, start, end=None):
         self.patterns.append(GrammarRule(name, start, end))
@@ -368,8 +370,8 @@ class Grammar:
         return result
 
 
-def simpleJsGrammar():
-    js = Grammar()
+def jsGrammar():
+    js = Grammar("js")
 
     js.add_rule(TokenTypes.COMMENT, r"\/\/.*")
     js.add_rule(TokenTypes.COMMENT, r"\/\*", r"\*\/")
@@ -400,11 +402,47 @@ def simpleJsGrammar():
     return js
 
 
-js_grammar = simpleJsGrammar()
+def pythonGrammar():
+    py = Grammar("python")
+
+    py.add_rule(TokenTypes.COMMENT, r"#.*")
+
+    py.add_rule(
+        TokenTypes.CONTROL,
+        r"\b(break|continue|elif|else|except|finally|for|if|pass|raise|return|try|while|with|yield)\b",
+    )
+    py.add_rule(TokenTypes.DECLARATION, r"\b(def|class|lambda|async|await)\b")
+    py.add_rule(TokenTypes.CONTEXT, r"\b(self|cls|super|import|from|as|global|nonlocal|del|assert)\b")
+    py.add_rule(TokenTypes.LITERAL, r"\b(True|False|None)\b")
+
+    py.add_rule(TokenTypes.STRING, r'"""', r'"""')
+    py.add_rule(TokenTypes.STRING, r"'''", r"'''")
+    py.add_rule(TokenTypes.STRING, r'"', r'"')
+    py.add_rule(TokenTypes.STRING, r"'", r"'")
+
+    py.add_rule(
+        TokenTypes.NUMERIC,
+        r"\b(?:0[bB][01]+|0[oO][0-7]+|0[xX][\dA-Fa-f]+|\d+(\.\d+)?([eE][+-]?\d+)?|\.\d+([eE][+-]?\d+)?)[jJ]?\b",
+    )
+    py.add_rule(
+        TokenTypes.OPERATOR,
+        r"(//=|>>=|<<=|\*\*=|//|\*\*|<<|>>|==|!=|<=|>=|<|>|\+=|-=|\*=|/=|%=|&=|\|=|\^=|@=|->|:=|=|\+|-|\*|/|%|&|\||\^|~|@|\.\.\.|\bnot\b|\band\b|\bor\b|\bin\b|\bis\b)",
+    )
+    py.add_rule(TokenTypes.VARIABLE, r"\b[a-zA-Z_][a-zA-Z0-9_]*\b")
+    py.add_rule(TokenTypes.PUNCTUATION, r"[.,;:()[\]{}]")
+
+    return py
+
+
+js_grammar = jsGrammar()
+py_grammar = pythonGrammar()
+none_grammar = Grammar("none")
+none_grammar.add_rule(TokenTypes.PUNCTUATION, r".*")
+
 COLOR_SCHEME = {
     TokenTypes.CONTROL: rgb(94, 129, 172),  # Nord Blue (#5E81AC)
     TokenTypes.DECLARATION: rgb(191, 97, 106),  # Nord Red (#BF616A)
-    TokenTypes.CONTEXT: rgb(136, 192, 208),  # Nord Light Blue (#88C0D0)
+    TokenTypes.CONTEXT: rgb(136, 200, 140),  # Nord Light Green
     TokenTypes.LITERAL: rgb(208, 135, 112),  # Nord Orange (#D08770)
     TokenTypes.STRING: rgb(163, 190, 140),  # Nord Green (#A3BE8C)
     TokenTypes.NUMERIC: rgb(180, 142, 173),  # Nord Purple (#B48EAD)
@@ -428,6 +466,7 @@ class TUICSV(TUI):
         self.redo_stack: Histroy = []
         self.transaction_ref_count = 0
 
+        self.grammar = none_grammar
         self.token: List[GrammarMatch] = []
         path = pathlib.Path(name)
         self.load_path(path)
@@ -477,7 +516,7 @@ class TUICSV(TUI):
         self.ftree = [x for x in self.ftree if x.name not in exclusion]
         self.ftree.sort(key=dir_entry_sort)
 
-    def load_file(self, path):
+    def load_file(self, path: pathlib.Path):
         self.dir = None
         self.file = path
         self.tcursor = Cursor()
@@ -488,6 +527,15 @@ class TUICSV(TUI):
         self.lines = [""]
         self.old_lines = [""]
 
+        extension = self.file.name.split(".")[-1]
+        match extension:
+            case "py":
+                self.grammar = py_grammar
+            case "js" | "json":
+                self.grammar = js_grammar
+            case _:
+                self.grammar = none_grammar
+
         try:
             with open(self.file) as f:
                 self.lines = f.read().splitlines()
@@ -496,7 +544,7 @@ class TUICSV(TUI):
             self.lwarn(f"Error when reading file {path}, File might be binary")
 
     def tokenize(self):
-        self.token = js_grammar.parse_text_buffer(self.lines)
+        self.token = self.grammar.parse_text_buffer(self.lines)
 
     @property
     def filtered_commands(self):
@@ -642,10 +690,10 @@ class TUICSV(TUI):
 
             lineno = self.scroll
             ti = 0
-            while lineno < len(self.token) and self.token[ti].line != lineno:
+            while ti < len(self.token) and self.token[ti].line != lineno:
                 ti += 1
             # TODO very slow implementation, I think
-            for i in range(0, box.h - 2):
+            for i in range(0, min(box.h - 2, self.nlines - self.scroll)):
                 result = dim(str(lineno + 1).ljust(line_no_space + 1))
                 while ti < len(self.token) and self.token[ti].line == lineno:
                     tok = self.token[ti]
@@ -698,6 +746,7 @@ class TUICSV(TUI):
                 self.add_line(f"end - {self.tcursor.end}", diag, next(ln))
                 self.add_line(f"Undo len - {len(self.undo_stack)}", diag, next(ln))
                 self.add_line(f"Redo len - {len(self.redo_stack)}", diag, next(ln))
+                self.add_line(f"Grammar - {self.grammar.name}", diag, next(ln))
 
     def on_input(self, ch):
         if ch == CTRL + "q":
