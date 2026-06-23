@@ -8,9 +8,6 @@ import re
 import os
 import sys
 
-# TODO ctrl backspace, del
-# TODO syntax highlighting
-
 Buffer = List[str]
 
 
@@ -270,7 +267,7 @@ class GrammarMatch:
     start: int
     end: int
     line: int
-    matched_class: str
+    matched_class: TokenTypes
 
 
 class Grammar:
@@ -388,6 +385,18 @@ def simpleJsGrammar():
 
 
 js_grammar = simpleJsGrammar()
+COLOR_SCHEME = {
+    TokenTypes.CONTROL: rgb(94, 129, 172),  # Nord Blue (#5E81AC)
+    TokenTypes.DECLARATION: rgb(191, 97, 106),  # Nord Red (#BF616A)
+    TokenTypes.CONTEXT: rgb(136, 192, 208),  # Nord Light Blue (#88C0D0)
+    TokenTypes.LITERAL: rgb(208, 135, 112),  # Nord Orange (#D08770)
+    TokenTypes.STRING: rgb(163, 190, 140),  # Nord Green (#A3BE8C)
+    TokenTypes.NUMERIC: rgb(180, 142, 173),  # Nord Purple (#B48EAD)
+    TokenTypes.OPERATOR: rgb(236, 239, 244),  # Nord Snow 2 (#ECEFF4)
+    TokenTypes.COMMENT: rgb(106, 115, 117),  # Nord Blue Gray (#81A1C1)
+    TokenTypes.VARIABLE: rgb(143, 188, 187),  # Nord Cyan (#8FBCBB)
+    TokenTypes.PUNCTUATION: rgb(236, 239, 244),  # Nord Snow 2 (#ECEFF4)
+}
 
 
 class TUICSV(TUI):
@@ -403,6 +412,7 @@ class TUICSV(TUI):
         self.redo_stack: Histroy = []
         self.transaction_ref_count = 0
 
+        self.token: List[GrammarMatch] = []
         path = pathlib.Path(name)
         self.load_path(path)
 
@@ -444,6 +454,7 @@ class TUICSV(TUI):
     def load_dir(self, path):
         self.dir = path
         self.file = None
+        self.token = []
 
         exclusion = [".git"]  # not sure if we want this
         self.ftree = os.scandir(self.dir)
@@ -464,8 +475,12 @@ class TUICSV(TUI):
         try:
             with open(self.file) as f:
                 self.lines = f.read().splitlines()
+            self.tokenize()
         except Exception:
             self.lwarn(f"Error when reading file {path}, File might be binary")
+
+    def tokenize(self):
+        self.token = js_grammar.parse_text_buffer(self.lines)
 
     @property
     def filtered_commands(self):
@@ -521,6 +536,7 @@ class TUICSV(TUI):
         self.old_lines.clear()
 
         self.undo_stack = self.undo_stack[-MAX_UNDO_HISTORY_SIZE:]
+        self.tokenize()
 
     def transaction(self):
         @contextmanager
@@ -540,6 +556,7 @@ class TUICSV(TUI):
 
         ed.undo(self.lines)
         self.tcursor = ed.start_cursor
+        self.tokenize()
 
     def redo(self):
         if len(self.redo_stack) == 0:
@@ -550,6 +567,7 @@ class TUICSV(TUI):
 
         ed.redo(self.lines)
         self.tcursor = ed.end_cursor
+        self.tokenize()
 
     def backspace(self):
         self.cursor_regulate()
@@ -606,25 +624,42 @@ class TUICSV(TUI):
             cx, cy = box.at(cx, cy)
             self.cursor_loc = [cx + line_no_space + 2, cy + 1]
 
-            lineno = self.scroll
-            for i, line in enumerate(self.lines[self.scroll :]):
-                lnt = dim(str(lineno + 1).ljust(line_no_space))
-                ltext = f"{lnt} {line}"
-                sel_eff = lambda x: gray_bg(dim(x))
-                if self.tcursor.is_selection():
-                    sx, sy = self.tcursor.sel_start
-                    ex, ey = self.tcursor.sel_end
-                    if sy == ey == lineno:
-                        ltext = f"{lnt} {line[:sx]}{sel_eff(line[sx:ex])}{line[ex:]}"
-                    elif lineno == sy:
-                        ltext = f"{lnt} {line[:sx]}{sel_eff(line[sx:])}"
-                    elif lineno == ey:
-                        ltext = f"{lnt} {sel_eff(line[:ex])}{line[ex:]}"
-                    elif ey > lineno > sy:
-                        ltext = f"{lnt} {sel_eff(line)}"
+            # TODO combine selection and syntax highlighting
+            if 0:
+                lineno = self.scroll
+                for i, line in enumerate(self.lines[self.scroll :]):
+                    lnt = dim(str(lineno + 1).ljust(line_no_space))
+                    ltext = f"{lnt} {line}"
+                    sel_eff = lambda x: gray_bg(dim(x))
+                    if self.tcursor.is_selection():
+                        sx, sy = self.tcursor.sel_start
+                        ex, ey = self.tcursor.sel_end
+                        if sy == ey == lineno:
+                            ltext = f"{lnt} {line[:sx]}{sel_eff(line[sx:ex])}{line[ex:]}"
+                        elif lineno == sy:
+                            ltext = f"{lnt} {line[:sx]}{sel_eff(line[sx:])}"
+                        elif lineno == ey:
+                            ltext = f"{lnt} {sel_eff(line[:ex])}{line[ex:]}"
+                        elif ey > lineno > sy:
+                            ltext = f"{lnt} {sel_eff(line)}"
 
-                self.blit_text_to_box(ltext, box, 1, 1 + i)
-                lineno += 1
+                    self.blit_text_to_box(ltext, box, 1, 1 + i)
+                    lineno += 1
+            else:
+                lineno = self.scroll
+                ti = 0
+                while lineno < len(self.token) and self.token[ti].line != lineno:
+                    ti += 1
+                for i, line in enumerate(self.lines[self.scroll :]):
+                    result = dim(str(lineno + 1).ljust(line_no_space)) + " "
+                    while ti < len(self.token) and self.token[ti].line == lineno:
+                        tok = self.token[ti]
+                        style = COLOR_SCHEME.get(tok.matched_class, noop)
+                        result += style(self.lines[tok.line][tok.start : tok.end])
+                        ti += 1
+
+                    self.blit_text_to_box(result, box, 1, 1 + i)
+                    lineno += 1
 
         # command pallete
         if self.command_pallete_open:
