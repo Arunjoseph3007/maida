@@ -19,8 +19,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Tuple, List
 
-# TODO better input editing (ctrl-back, del)
-
 
 def clamp(n: int, minn: int, maxn: int):
     if n < minn:
@@ -30,11 +28,15 @@ def clamp(n: int, minn: int, maxn: int):
     return n
 
 
-def ansi(effect: str):
-    def wrapper(t: str) -> str:
-        return effect + t + ANSI.RESET
+@dataclass
+class ansi:
+    code: str
 
-    return wrapper
+    def __call__(self, text: str):
+        return self.code + text + ANSIParser.RESET
+
+    def __add__(self, other):
+        return ansi(self.code + other.code)
 
 
 def is_widechar(l: str) -> bool:
@@ -323,7 +325,7 @@ class Log:
         return self.level.get_decoration()(log)
 
 
-class ANSI:
+class ANSIParser:
     RE = re.compile(r"\x1b\[[0-9;]*m")
     # RE = re.compile(r"\x1b\[[0-9;]*(m|K)")
     RESET = "\x1b[0m"
@@ -333,18 +335,18 @@ class ANSI:
 
     def update(self, code: str):
         # can be more sophisticated check for reset
-        if code == ANSI.RESET:
+        if code == ANSIParser.RESET:
             self.codes = []
         else:
             self.codes.append(code)
 
     def ingest(self, text: str):
-        for code in ANSI.RE.findall(text):
+        for code in ANSIParser.RE.findall(text):
             self.update(code)
 
     @property
     def state_code(self):
-        return ANSI.RESET + "".join(self.codes)
+        return ANSIParser.RESET + "".join(self.codes)
 
 
 class Keys(enum.StrEnum):
@@ -749,7 +751,7 @@ class TUI(abc.ABC):
 
         lines = text.splitlines()
 
-        ansi = ANSI()
+        ansi = ANSIParser()
         ansi.ingest("\n".join(lines[:scrolly]))
 
         lines = lines[scrolly : scrolly + box.h + 1]
@@ -758,7 +760,7 @@ class TUI(abc.ABC):
             i = 0
             prefix = ansi.state_code
             while i < len(line):
-                m = ANSI.RE.match(line, i)
+                m = ANSIParser.RE.match(line, i)
                 row = y + yo
                 col = x + xo - scrollx
                 if m:
@@ -793,7 +795,7 @@ class TUI(abc.ABC):
                 and self.zindex >= self.zbuffer[row][col]
             ):
                 # TODO this might need some more work and precision
-                self.output[row][col] += ANSI.RESET
+                self.output[row][col] += ANSIParser.RESET
 
     def render_diagnostics(self, box: Box):
         self.clean_box(box)
