@@ -95,6 +95,22 @@ class Cursor:
     def is_selection(self):
         return self.start != self.end
 
+    def is_within_selection(self, x, y):
+        if not self.is_selection():
+            return False
+
+        sx, sy = self.sel_start
+        ex, ey = self.sel_end
+        if sy == ey:
+            return sy == y and sx <= x < ex
+        if sy < y < ey:
+            return True
+        if y == sy:
+            return x >= sx
+        if y == ey:
+            return x < ex
+        return False
+
     def get_selection_text(self, lines):
         if not self.is_selection():
             return ""
@@ -624,42 +640,25 @@ class TUICSV(TUI):
             cx, cy = box.at(cx, cy)
             self.cursor_loc = [cx + line_no_space + 2, cy + 1]
 
-            # TODO combine selection and syntax highlighting
-            if 0:
-                lineno = self.scroll
-                for i, line in enumerate(self.lines[self.scroll :]):
-                    lnt = dim(str(lineno + 1).ljust(line_no_space))
-                    ltext = f"{lnt} {line}"
-                    sel_eff = lambda x: gray_bg(dim(x))
-                    if self.tcursor.is_selection():
-                        sx, sy = self.tcursor.sel_start
-                        ex, ey = self.tcursor.sel_end
-                        if sy == ey == lineno:
-                            ltext = f"{lnt} {line[:sx]}{sel_eff(line[sx:ex])}{line[ex:]}"
-                        elif lineno == sy:
-                            ltext = f"{lnt} {line[:sx]}{sel_eff(line[sx:])}"
-                        elif lineno == ey:
-                            ltext = f"{lnt} {sel_eff(line[:ex])}{line[ex:]}"
-                        elif ey > lineno > sy:
-                            ltext = f"{lnt} {sel_eff(line)}"
-
-                    self.blit_text_to_box(ltext, box, 1, 1 + i)
-                    lineno += 1
-            else:
-                lineno = self.scroll
-                ti = 0
-                while lineno < len(self.token) and self.token[ti].line != lineno:
+            lineno = self.scroll
+            ti = 0
+            while lineno < len(self.token) and self.token[ti].line != lineno:
+                ti += 1
+            # TODO very slow implementation, I think
+            for i in range(0, box.h - 2):
+                result = dim(str(lineno + 1).ljust(line_no_space + 1))
+                while ti < len(self.token) and self.token[ti].line == lineno:
+                    tok = self.token[ti]
+                    style = COLOR_SCHEME.get(tok.matched_class, noop)
+                    for x in range(tok.start, tok.end):
+                        ch = style(self.lines[tok.line][x])
+                        if self.tcursor.is_within_selection(x, lineno):
+                            ch = gray_bg(ch)
+                        result += ch
                     ti += 1
-                for i, line in enumerate(self.lines[self.scroll :]):
-                    result = dim(str(lineno + 1).ljust(line_no_space)) + " "
-                    while ti < len(self.token) and self.token[ti].line == lineno:
-                        tok = self.token[ti]
-                        style = COLOR_SCHEME.get(tok.matched_class, noop)
-                        result += style(self.lines[tok.line][tok.start : tok.end])
-                        ti += 1
 
-                    self.blit_text_to_box(result, box, 1, 1 + i)
-                    lineno += 1
+                self.blit_text_to_box(result, box, 1, 1 + i)
+                lineno += 1
 
         # command pallete
         if self.command_pallete_open:
