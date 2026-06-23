@@ -482,6 +482,10 @@ class TUICSV(TUI):
         self.command_inp = InputWG("command_query")
         self.command_sel_index = -1
 
+        self.find_mode = False
+        self.find_inp = InputWG("find_query")
+        self.last_found = Anchor()
+
     def apply_on_selection(self, fn):
         if not self.tcursor.is_selection():
             return
@@ -654,6 +658,12 @@ class TUICSV(TUI):
         elif self.cy < self.nlines - 1:
             self.lines[self.cy] += self.lines.pop(self.cy + 1)
 
+    def align_cursors(self):
+        if self.cy < self.scroll:
+            self.scroll = self.cy
+        elif self.cy > self.scroll + self.box_height - 1:
+            self.scroll = self.cy - self.box_height + 1
+
     def render(self):
         ftree_box, box = self.box.left(30)
         self.draw_box(ftree_box)
@@ -711,29 +721,37 @@ class TUICSV(TUI):
         # command pallete
         if self.command_pallete_open:
             with self.error_logging("pallete"):
-                palleteb = self.box.centered(80, 20)
-                self.clean_box(palleteb)
-                self.draw_box(palleteb)
+                with self.withz(100):
+                    palleteb = self.box.centered(80, 20)
+                    self.clean_box(palleteb)
+                    self.draw_box(palleteb)
 
-                ln = next_line(1)
-                self.add_line("Command Pallete", palleteb, next(ln), align=TextAlign.CENTER, effect=pale_yellow)
+                    ln = next_line(1)
+                    self.add_line("Command Pallete", palleteb, next(ln), align=TextAlign.CENTER, effect=pale_yellow)
 
-                rest = palleteb.pad(top=2)
-                inputb, rest = rest.top(3)
-                self.mount(self.command_inp, inputb.pad(x=1))
+                    rest = palleteb.pad(top=2)
+                    inputb, rest = rest.top(3)
+                    self.mount(self.command_inp, inputb.pad(x=1))
 
-                for cmd_i, cmd in enumerate(self.filtered_commands):
-                    b, rest = rest.top(1)
-                    hovering = self.hovering(b)
-                    clicking = self.clicking(b)
-                    eff = self.command_sel_index == cmd_i and gray_bg
-                    self.add_line(cmd["name"], b, 0, effect=eff)
-                    if clicking:
-                        with self.transaction():
-                            cmd["func"]()
-                        self.command_pallete_open = False
-                    elif self.mouse.updated and hovering:
-                        self.command_sel_index = cmd_i
+                    for cmd_i, cmd in enumerate(self.filtered_commands):
+                        b, rest = rest.top(1)
+                        hovering = self.hovering(b)
+                        clicking = self.clicking(b)
+                        eff = self.command_sel_index == cmd_i and gray_bg
+                        self.add_line(cmd["name"], b, 0, effect=eff)
+                        if clicking:
+                            with self.transaction():
+                                cmd["func"]()
+                            self.command_pallete_open = False
+                        elif self.mouse.updated and hovering:
+                            self.command_sel_index = cmd_i
+
+        # find
+        if self.find_mode:
+            with self.error_logging("find"):
+                with self.withz(100):
+                    fb = self.box.bottom_right(50, 3)
+                    self.mount(self.find_inp, fb)
 
         # diag
         if self.display_diagnostics:
@@ -777,6 +795,47 @@ class TUICSV(TUI):
                 self.command_pallete_open = False
             elif ch.isprintable():
                 self.command_sel_index = -1
+
+            return
+
+        if ch == CTRL + "f":
+            self.find_mode = not self.find_mode
+            if self.find_mode:
+                self.find_inp.focused = True
+        if self.find_mode:
+            if ch == ESC:
+                self.find_mode = False
+            if ch == Keys.ENTER:
+                i = self.last_found.cy
+                for _ in range(self.nlines):
+                    fidx = self.lines[i].find(self.find_inp.value, self.last_found.cx)
+                    self.last_found.cx = 0
+                    if fidx >= 0:
+                        self.tcursor.start.cy = i
+                        self.tcursor.end.cy = i
+                        self.tcursor.start.cx = fidx
+                        self.tcursor.end.cx = fidx + len(self.find_inp.value)
+
+                        self.last_found.cx = self.tcursor.end.cx
+                        self.last_found.cy = self.tcursor.end.cy
+                        break
+                    i = (i + 1) % self.nlines
+            if ch == SHIFT + Keys.ENTER:
+                i = self.last_found.cy
+                for _ in range(self.nlines):
+                    fidx = self.lines[i].find(self.find_inp.value, self.last_found.cx)
+                    self.last_found.cx = 0
+                    if fidx >= 0:
+                        self.tcursor.start.cy = i
+                        self.tcursor.end.cy = i
+                        self.tcursor.start.cx = fidx
+                        self.tcursor.end.cx = fidx + len(self.find_inp.value)
+
+                        self.last_found.cx = self.tcursor.end.cx
+                        self.last_found.cy = self.tcursor.end.cy
+                        break
+                    i = (i - 1) % self.nlines
+            self.align_cursors()
             return
 
         if ch == CTRL + "s":
@@ -934,11 +993,7 @@ class TUICSV(TUI):
         if ch == CTRL + "y":
             self.redo()
 
-        # check if cursor is on screen
-        if self.cy < self.scroll:
-            self.scroll = self.cy
-        elif self.cy > self.scroll + self.box_height - 1:
-            self.scroll = self.cy - self.box_height + 1
+        self.align_cursors()
 
 
 app = TUICSV(".")

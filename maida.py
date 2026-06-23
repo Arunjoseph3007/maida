@@ -1082,6 +1082,7 @@ class InputWG(Widget):
         col = pale_yellow
         if self.focused:
             col = red
+        tui.clean_box(box)
         tui.draw_box(box, effect=col)
         tui.blit_text_to_box(self.value, box, 1, 1)
         tui.blit_text_to_box(col(self.title), box, 1, 0)
