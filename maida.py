@@ -564,14 +564,11 @@ class TUI(abc.ABC):
         self.widgets.append(widget)
         widget.render(self, box)
 
+    @contextmanager
     def withz(self, zi: int):
-        @contextmanager
-        def zcontext(tui, newz):
-            oldz = tui.zraise(newz)
-            yield
-            tui.zreset(oldz)
-
-        return zcontext(self, zi)
+        oldz = self.zraise(zi)
+        yield
+        self.zreset(oldz)
 
     def shutdown(self):
         self.running = False
@@ -592,21 +589,18 @@ class TUI(abc.ABC):
     def zreset(self, zi=0):
         self.zindex = zi
 
+    @contextmanager
     def error_logging(self, title="untitled"):
-        @contextmanager
-        def error_logging(tui, group):
-            try:
-                yield
-            except Exception as e:
-                _, _, exc_tb = sys.exc_info()
-                tb_info = traceback.extract_tb(exc_tb, 10)
-                tb_info.reverse()
+        try:
+            yield
+        except Exception as e:
+            _, _, exc_tb = sys.exc_info()
+            tb_info = traceback.extract_tb(exc_tb, 10)
+            tb_info.reverse()
 
-                for i, tb in enumerate(tb_info):
-                    padding = " " + "  " * i
-                    tui.log(LogLevels.ERROR, f"[{group}]{padding}{tb.filename}:{tb.name}:{tb.lineno}: {repr(e)}")
-
-        return error_logging(self, title)
+            for i, tb in enumerate(tb_info):
+                padding = " " + "  " * i
+                self.log(LogLevels.ERROR, f"[{title}]{padding}{tb.filename}:{tb.name}:{tb.lineno}: {repr(e)}")
 
     def wrapped_render(self):
         with self.error_logging("render"):

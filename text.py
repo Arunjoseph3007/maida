@@ -2,6 +2,7 @@ from maida import *
 from dataclasses import dataclass
 from typing import List
 from contextlib import contextmanager
+from io import StringIO
 import base64
 import pathlib
 import re
@@ -477,6 +478,10 @@ class TUICSV(TUI):
             {"name": "capitalize", "func": lambda: self.apply_on_selection(str.capitalize)},
             {"name": "swapcase", "func": lambda: self.apply_on_selection(str.swapcase)},
             {"name": "titlecase", "func": lambda: self.apply_on_selection(str.title)},
+            {"name": "sort_lines", "func": lambda: self.sort_lines()},
+            {"name": "sort_lines_desc", "func": lambda: self.sort_lines(reverse=True)},
+            {"name": "eval_py", "func": lambda: self.eval_py()},
+            {"name": "exec_py", "func": lambda: self.exec_py()},
         ]
         self.command_pallete_open = False
         self.command_inp = InputWG("command_query")
@@ -485,6 +490,53 @@ class TUICSV(TUI):
         self.find_mode = False
         self.find_inp = InputWG("find_query")
         self.last_found = Anchor()
+
+    def eval_py(self):
+        if not self.tcursor.is_selection():
+            return
+
+        sx, sy = self.tcursor.sel_start
+        ex, ey = self.tcursor.sel_end
+        if sy != ey:
+            return
+
+        with self.transaction():
+            expr = self.lines[self.cy][sx:ex]
+            try:
+                result = eval(expr)
+                self.lines.insert(ey + 1, f"# RESULT: {repr(result)}")
+            except Exception as e:
+                self.lines.insert(ey + 1, f"# ERROR: {repr(e)}")
+
+    def exec_py(self):
+        if not self.tcursor.is_selection():
+            return
+
+        text = self.tcursor.get_selection_text(self.lines)
+        _, ey = self.tcursor.sel_end
+        with self.transaction():
+            try:
+                buffer = StringIO()
+                old_stdout = sys.stdout
+                sys.stdout = buffer
+                exec(text)
+                sys.stdout = old_stdout
+                captured_output = buffer.getvalue()
+
+                for i, l in enumerate(captured_output.splitlines()):
+                    self.lines.insert(ey + 1 + i, f"# {l}")
+            except Exception as e:
+                self.lines.insert(ey + 1, f"# ERROR: {repr(e)}")
+
+    def sort_lines(self, reverse=False):
+        with self.transaction():
+            if self.tcursor.is_selection():
+                _, sy = self.tcursor.sel_start
+                _, ey = self.tcursor.sel_end
+
+                self.lines[sy : ey + 1] = sorted(self.lines[sy : ey + 1], reverse=reverse)
+            else:
+                self.lines.sort(reverse=reverse)
 
     def apply_on_selection(self, fn):
         if not self.tcursor.is_selection():
@@ -658,7 +710,7 @@ class TUICSV(TUI):
         elif self.cy < self.nlines - 1:
             self.lines[self.cy] += self.lines.pop(self.cy + 1)
 
-    def align_cursors(self):
+    def scroll_to_cursor_end(self):
         if self.cy < self.scroll:
             self.scroll = self.cy
         elif self.cy > self.scroll + self.box_height - 1:
@@ -700,7 +752,7 @@ class TUICSV(TUI):
 
             lineno = self.scroll
             ti = 0
-            while ti < len(self.token) and self.token[ti].line != lineno:
+            while ti < len(self.token) and self.token[ti].line < lineno:
                 ti += 1
             # TODO very slow implementation, I think
             for i in range(0, min(box.h - 2, self.nlines - self.scroll)):
@@ -802,6 +854,11 @@ class TUICSV(TUI):
             self.find_mode = not self.find_mode
             if self.find_mode:
                 self.find_inp.focused = True
+                if self.tcursor.is_selection() and self.tcursor.start.cy == self.tcursor.end.cy:
+                    sx = min(self.tcursor.start.cx, self.tcursor.end.cx)
+                    ex = max(self.tcursor.start.cx, self.tcursor.end.cx)
+                    self.find_inp.value = self.lines[self.cy][sx:ex]
+                    self.find_inp.curs = ex - sx
         if self.find_mode:
             if ch == ESC:
                 self.find_mode = False
@@ -835,7 +892,7 @@ class TUICSV(TUI):
                         self.last_found.cy = self.tcursor.end.cy
                         break
                     i = (i - 1) % self.nlines
-            self.align_cursors()
+            self.scroll_to_cursor_end()
             return
 
         if ch == CTRL + "s":
@@ -993,7 +1050,7 @@ class TUICSV(TUI):
         if ch == CTRL + "y":
             self.redo()
 
-        self.align_cursors()
+        self.scroll_to_cursor_end()
 
 
 app = TUICSV(".")
