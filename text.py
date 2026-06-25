@@ -985,6 +985,8 @@ class TUICSV(TUI):
             return
 
         if self.cur_commands:
+            if ch == Keys.ESC:
+                self.cur_commands = None
             if ch == Keys.ENTER:
                 cur_arg = self.cur_commands.args[self.cur_command_args_idz]
                 try:
