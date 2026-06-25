@@ -389,7 +389,7 @@ class KeyEvent:
 
         raise Exception(f"Cannot eq compare {type(value)} with {type(self)}")
 
-    def __add__(self, value) -> KeyEvent:
+    def __add__(self, value):
         if isinstance(value, Keys):
             return self + KeyEvent(value)
 
@@ -417,7 +417,7 @@ class KeyEvent:
         )
 
     @staticmethod
-    def init(key: str) -> KeyEvent:
+    def init(key: str):
         special_key_mappings = {
             "A": Keys.UP,
             "B": Keys.DOWN,
@@ -600,7 +600,8 @@ class TUI(abc.ABC):
 
             for i, tb in enumerate(tb_info):
                 padding = " " + "  " * i
-                self.log(LogLevels.ERROR, f"[{title}]{padding}{tb.filename}:{tb.name}:{tb.lineno}: {repr(e)}")
+                # self.log(LogLevels.ERROR, f"[{title}]{padding}{tb.filename}:{tb.name}:{tb.lineno}: {repr(e)}")
+                self.log(LogLevels.ERROR, f"[{title}]{padding}:{tb.name}:{tb.lineno}: {repr(e)}")
 
     def wrapped_render(self):
         with self.error_logging("render"):

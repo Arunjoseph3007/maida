@@ -57,13 +57,13 @@ class Anchor:
         if self.cy < len(lines) - 1:
             self.cy += 1
 
-    def __eq__(self, value: Anchor):
+    def __eq__(self, value):
         if type(self) != type(value):
             raise Exception(f"Cant compare {type(value)} with {type(self)}")
 
         return self.cx == value.cx and self.cy == value.cy
 
-    def __lt__(self, value: Anchor):
+    def __lt__(self, value):
         if type(self) != type(value):
             raise Exception(f"Cant compare {type(value)} with {type(self)}")
 
@@ -71,7 +71,7 @@ class Anchor:
             return self.cy < value.cy
         return self.cx < value.cx
 
-    def __gt__(self, value: Anchor):
+    def __gt__(self, value):
         if type(self) != type(value):
             raise Exception(f"Cant compare {type(value)} with {type(self)}")
 
@@ -267,6 +267,7 @@ class TokenTypes(enum.StrEnum):
     OPERATOR = enum.auto()
     VARIABLE = enum.auto()
     PUNCTUATION = enum.auto()
+    NONE = enum.auto()
 
 
 @dataclass
@@ -364,6 +365,7 @@ class Grammar:
                             break
 
                 if not found:
+                    result.append(GrammarMatch(start=i, end=i+1,matched_class=TokenTypes.NONE, line=line_no))
                     i += 1
 
             line_no += 1
@@ -435,8 +437,21 @@ def pythonGrammar():
     return py
 
 
+def mdGrammar():
+    md = Grammar("markdown")
+    md.add_rule(TokenTypes.DECLARATION, r"^#+ .*$") # heading
+    md.add_rule(TokenTypes.CONTROL, r"\*.*\*") # bold
+    md.add_rule(TokenTypes.CONTEXT, r"\*\*.*\*\*") # italics
+    md.add_rule(TokenTypes.NUMERIC, r"\[\w+\]") # links
+    md.add_rule(TokenTypes.LITERAL, r"```", r"```") # code block
+    
+    md.add_rule(TokenTypes.PUNCTUATION, r"(\s|\w+)") # catch all
+    return md
+
+
 js_grammar = jsGrammar()
 py_grammar = pythonGrammar()
+md_grammar = mdGrammar()
 none_grammar = Grammar("none")
 none_grammar.add_rule(TokenTypes.PUNCTUATION, r".*")
 
@@ -589,6 +604,8 @@ class TUICSV(TUI):
                 self.grammar = py_grammar
             case "js" | "json":
                 self.grammar = js_grammar
+            case "md":
+                self.grammar = md_grammar
             case _:
                 self.grammar = none_grammar
 
@@ -817,6 +834,7 @@ class TUICSV(TUI):
                 self.add_line(f"Undo len - {len(self.undo_stack)}", diag, next(ln))
                 self.add_line(f"Redo len - {len(self.redo_stack)}", diag, next(ln))
                 self.add_line(f"Grammar - {self.grammar.name}", diag, next(ln))
+                self.add_line(f"Num token - {len(self.token)}", diag, next(ln))
 
     def on_input(self, ch):
         if ch == CTRL + "q":
