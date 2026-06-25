@@ -365,7 +365,7 @@ class Grammar:
                             break
 
                 if not found:
-                    result.append(GrammarMatch(start=i, end=i+1,matched_class=TokenTypes.NONE, line=line_no))
+                    result.append(GrammarMatch(start=i, end=i + 1, matched_class=TokenTypes.NONE, line=line_no))
                     i += 1
 
             line_no += 1
@@ -439,13 +439,13 @@ def pythonGrammar():
 
 def mdGrammar():
     md = Grammar("markdown")
-    md.add_rule(TokenTypes.DECLARATION, r"^#+ .*$") # heading
-    md.add_rule(TokenTypes.CONTROL, r"\*.*\*") # bold
-    md.add_rule(TokenTypes.CONTEXT, r"\*\*.*\*\*") # italics
-    md.add_rule(TokenTypes.NUMERIC, r"\[\w+\]") # links
-    md.add_rule(TokenTypes.LITERAL, r"```", r"```") # code block
-    
-    md.add_rule(TokenTypes.PUNCTUATION, r"(\s|\w+)") # catch all
+    md.add_rule(TokenTypes.DECLARATION, r"^#+ .*$")  # heading
+    md.add_rule(TokenTypes.CONTROL, r"\*.*\*")  # bold
+    md.add_rule(TokenTypes.CONTEXT, r"\*\*.*\*\*")  # italics
+    md.add_rule(TokenTypes.NUMERIC, r"\[\w+\]")  # links
+    md.add_rule(TokenTypes.LITERAL, r"```", r"```")  # code block
+
+    md.add_rule(TokenTypes.PUNCTUATION, r"(\s|\w+)")  # catch all
     return md
 
 
@@ -469,6 +469,17 @@ COLOR_SCHEME = {
 }
 
 
+class Command:
+    def __init__(self, name: str, func):
+        self.name = name
+        self.func = func
+        self.args = []
+
+    def addarg(self, name: str, proc=str, default=None):
+        self.args.append({"name": name, "proc": proc, "default": default})
+        return self
+
+
 class TUICSV(TUI):
     def __init__(self, name):
         super().__init__(fps=30, mouse_mode=MouseMode.ALL_SGR)
@@ -487,24 +498,41 @@ class TUICSV(TUI):
         path = pathlib.Path(name)
         self.load_path(path)
 
-        self.commands = [
-            {"name": "uppercase", "func": lambda: self.apply_on_selection(str.upper)},
-            {"name": "lowercase", "func": lambda: self.apply_on_selection(str.lower)},
-            {"name": "capitalize", "func": lambda: self.apply_on_selection(str.capitalize)},
-            {"name": "swapcase", "func": lambda: self.apply_on_selection(str.swapcase)},
-            {"name": "titlecase", "func": lambda: self.apply_on_selection(str.title)},
-            {"name": "sort_lines", "func": lambda: self.sort_lines()},
-            {"name": "sort_lines_desc", "func": lambda: self.sort_lines(reverse=True)},
-            {"name": "eval_py", "func": lambda: self.eval_py()},
-            {"name": "exec_py", "func": lambda: self.exec_py()},
+        self.commands: List[Command] = [
+            Command("uppercase", lambda: self.apply_on_selection(str.upper)),
+            Command("lowercase", lambda: self.apply_on_selection(str.lower)),
+            Command("capitalize", lambda: self.apply_on_selection(str.capitalize)),
+            Command("swapcase", lambda: self.apply_on_selection(str.swapcase)),
+            Command("titlecase", lambda: self.apply_on_selection(str.title)),
+            Command("sort_lines", lambda: self.sort_lines()),
+            Command("sort_lines_desc", lambda: self.sort_lines(reverse=True)),
+            Command("eval_py", lambda: self.eval_py()),
+            Command("exec_py", lambda: self.exec_py()),
+            Command("goto_line", self.goto_line).addarg("lineno", int),
         ]
         self.command_pallete_open = False
         self.command_inp = InputWG("command_query")
         self.command_sel_index = -1
+        self.cur_commands = None
+        self.cur_command_args = {}
+        self.cur_command_args_idz = -1
+        self.cur_command_args_inp = InputWG("cur_arg")
 
         self.find_mode = False
         self.find_inp = InputWG("find_query")
         self.last_found = Anchor()
+
+    def goto_line(self, args):
+        ln = args["lineno"]
+        if ln > self.nlines:
+            self.lwarn(f"Cant goto line {ln}")
+            return
+
+        self.tcursor.start.cy = ln - 1
+        self.tcursor.end.cy = ln - 1
+        self.tcursor.start.cx = 0
+        self.tcursor.end.cx = 0
+        self.scroll_to_cursor_end()
 
     def eval_py(self):
         if not self.tcursor.is_selection():
@@ -524,17 +552,15 @@ class TUICSV(TUI):
                 self.lines.insert(ey + 1, f"# ERROR: {repr(e)}")
 
     def exec_py(self):
-        if not self.tcursor.is_selection():
-            return
+        text = self.tcursor.get_selection_text(self.lines) if self.tcursor.is_selection() else "\n".join(self.lines)
 
-        text = self.tcursor.get_selection_text(self.lines)
         _, ey = self.tcursor.sel_end
         with self.transaction():
             try:
                 buffer = StringIO()
                 old_stdout = sys.stdout
                 sys.stdout = buffer
-                exec(text)
+                exec(text, {})
                 sys.stdout = old_stdout
                 captured_output = buffer.getvalue()
 
@@ -621,7 +647,7 @@ class TUICSV(TUI):
 
     @property
     def filtered_commands(self):
-        return [x for x in self.commands if self.command_inp.value in x["name"]]
+        return [x for x in self.commands if self.command_inp.value in x.name]
 
     def save(self):
         if not self.file:
@@ -733,6 +759,26 @@ class TUICSV(TUI):
         elif self.cy > self.scroll + self.box_height - 1:
             self.scroll = self.cy - self.box_height + 1
 
+    def exec_command(self, cmd: Command):
+        if not cmd.args:
+            with self.transaction():
+                cmd.func()
+        else:
+            self.cur_commands = cmd
+            self.cur_command_args = {}
+            self.cur_command_args_idz = 0
+            self.cur_command_args_inp.value = ""
+            self.cur_command_args_inp.curs = 0
+            self.cur_command_args_inp.focused = True
+        self.command_pallete_open = False
+
+    def exec_command_with_args(self):
+        try:
+            self.cur_commands.func(self.cur_command_args)
+        except Exception as e:
+            self.lerror(f"Error running {self.cur_commands.name} - {repr(e)}")
+        self.cur_commands = None
+
     def render(self):
         ftree_box, box = self.box.left(30)
         self.draw_box(ftree_box)
@@ -791,14 +837,14 @@ class TUICSV(TUI):
         if self.command_pallete_open:
             with self.error_logging("pallete"):
                 with self.withz(100):
-                    palleteb = self.box.centered(80, 20)
-                    self.clean_box(palleteb)
-                    self.draw_box(palleteb)
+                    cur_cmdb = self.box.centered(80, 20)
+                    self.clean_box(cur_cmdb)
+                    self.draw_box(cur_cmdb)
 
                     ln = next_line(1)
-                    self.add_line("Command Pallete", palleteb, next(ln), align=TextAlign.CENTER, effect=pale_yellow)
+                    self.add_line("Command Pallete", cur_cmdb, next(ln), align=TextAlign.CENTER, effect=pale_yellow)
 
-                    rest = palleteb.pad(top=2)
+                    rest = cur_cmdb.pad(top=2)
                     inputb, rest = rest.top(3)
                     self.mount(self.command_inp, inputb.pad(x=1))
 
@@ -807,13 +853,40 @@ class TUICSV(TUI):
                         hovering = self.hovering(b)
                         clicking = self.clicking(b)
                         eff = self.command_sel_index == cmd_i and gray_bg
-                        self.add_line(cmd["name"], b, 0, effect=eff)
+                        self.add_line(cmd.name, b, 0, effect=eff)
                         if clicking:
-                            with self.transaction():
-                                cmd["func"]()
-                            self.command_pallete_open = False
+                            self.exec_command(cmd)
                         elif self.mouse.updated and hovering:
                             self.command_sel_index = cmd_i
+
+        # running command
+        if self.cur_commands:
+            with self.error_logging("cur_command"):
+                with self.withz(100):
+                    cur_cmdb = self.box.centered(80, 20)
+                    self.clean_box(cur_cmdb)
+                    self.draw_box(cur_cmdb)
+
+                    lineno = next_line(1)
+                    for i, arg in enumerate(self.cur_commands.args):
+                        key = arg["name"]
+                        val = self.cur_command_args.get(key)
+                        style = noop
+                        if i == self.cur_command_args_idz:
+                            style = cyan
+                            val = self.cur_command_args_inp.value
+                        if i > self.cur_command_args_idz:
+                            style = dim
+                            val = dim("-")
+                        self.add_line(f"{style(key.ljust(10))}: {val}", cur_cmdb, next(lineno))
+
+                    cur_arg = self.cur_commands.args[self.cur_command_args_idz]
+                    cur_args_titlebar, cur_args_box = cur_cmdb.pad(1).bottom(4)[1].top(1)
+                    self.add_line(cur_arg["name"], cur_args_titlebar, 0, effect=pale_yellow)
+
+                    # TODO this feels wrong here
+                    self.cur_command_args_inp.placeholder = cur_arg.get("default")
+                    self.mount(self.cur_command_args_inp, cur_args_box)
 
         # find
         if self.find_mode:
@@ -860,9 +933,7 @@ class TUICSV(TUI):
                 if self.command_sel_index >= len(self.filtered_commands):
                     self.command_sel_index = 0
             elif ch == Keys.ENTER:
-                with self.transaction():
-                    self.filtered_commands[self.command_sel_index]["func"]()
-                self.command_pallete_open = False
+                self.exec_command(self.filtered_commands[self.command_sel_index])
             elif ch.isprintable():
                 self.command_sel_index = -1
 
@@ -911,6 +982,24 @@ class TUICSV(TUI):
                         break
                     i = (i - 1) % self.nlines
             self.scroll_to_cursor_end()
+            return
+
+        if self.cur_commands:
+            if ch == Keys.ENTER:
+                cur_arg = self.cur_commands.args[self.cur_command_args_idz]
+                try:
+                    arg_value = self.cur_command_args_inp.value
+                    if not arg_value and cur_arg.get("default"):
+                        arg_value = cur_arg.get("default")
+                    arg_value = cur_arg.get("proc")(arg_value)
+                    self.cur_command_args[cur_arg["name"]] = arg_value
+
+                    self.cur_command_args_inp.reset()
+                    self.cur_command_args_idz += 1
+                    if self.cur_command_args_idz >= len(self.cur_commands.args):
+                        self.exec_command_with_args()
+                except Exception as e:
+                    self.lwarn(f"Error when processing args {cur_arg['name']} - {repr(e)}")
             return
 
         if ch == CTRL + "s":

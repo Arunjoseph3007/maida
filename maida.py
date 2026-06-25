@@ -1067,11 +1067,12 @@ class Widget(abc.ABC):
 
 
 class InputWG(Widget):
-    def __init__(self, title: str):
+    def __init__(self, title: str, placeholder=None):
         self.focused = False
         self.curs = 0
         self.value = ""
         self.title = title
+        self.placeholder = placeholder
 
     def render(self, tui: TUI, box: Box):
         col = pale_yellow
@@ -1079,7 +1080,11 @@ class InputWG(Widget):
             col = red
         tui.clean_box(box)
         tui.draw_box(box, effect=col)
-        tui.blit_text_to_box(self.value, box, 1, 1)
+
+        inp_text = self.value
+        if not self.value and self.placeholder:
+            inp_text = dim(self.placeholder)
+        tui.blit_text_to_box(inp_text, box, 1, 1)
         tui.blit_text_to_box(col(self.title), box, 1, 0)
 
         if tui.clicking(box):
@@ -1090,6 +1095,10 @@ class InputWG(Widget):
         if self.focused:
             cx, cy = box.at(self.curs + 1, 1)
             tui.cursor_loc = [cx, cy]
+
+    def reset(self):
+        self.value = ""
+        self.curs = 0
 
     def on_input(self, tui: TUI, ch: str):
         if not self.focused:
