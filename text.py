@@ -1,6 +1,6 @@
 from maida import *
 from dataclasses import dataclass
-from typing import List
+from typing import List, Any
 from contextlib import contextmanager
 from io import StringIO
 import base64
@@ -301,11 +301,11 @@ class Grammar:
 
     def parse_text_buffer(self, tb: list[str]) -> list[GrammarMatch]:
         result = []
-        line_no = 0
 
+        line_no = 0
         while line_no < len(tb):
             i = 0
-            while i < len(tb[line_no]):
+            while line_no < len(tb) and i < len(tb[line_no]):
                 c = tb[line_no][i]
 
                 # Ignore whitespace
@@ -469,14 +469,25 @@ COLOR_SCHEME = {
 }
 
 
+@dataclass
+class CmdArgs:
+    name: str
+    proc: Any = str
+    default: Any = None
+
+    def get_val(self, val):
+        return self.proc(val or self.default or "")
+
+
 class Command:
     def __init__(self, name: str, func):
         self.name = name
         self.func = func
-        self.args = []
+        self.args: List[CmdArgs] = []
 
     def addarg(self, name: str, proc=str, default=None):
-        self.args.append({"name": name, "proc": proc, "default": default})
+        ca = CmdArgs(name, proc, default)
+        self.args.append(ca)
         return self
 
 
@@ -506,8 +517,9 @@ class TUICSV(TUI):
             Command("titlecase", lambda: self.apply_on_selection(str.title)),
             Command("sort_lines", lambda: self.sort_lines()),
             Command("sort_lines_desc", lambda: self.sort_lines(reverse=True)),
-            Command("eval_py", lambda: self.eval_py()),
-            Command("exec_py", lambda: self.exec_py()),
+            Command("eval_py", self.eval_py),
+            Command("exec_py", self.exec_py),
+            Command("select_brackets", self.select_brackets),
             Command("goto_line", self.goto_line).addarg("lineno", int),
         ]
         self.command_pallete_open = False
@@ -524,7 +536,7 @@ class TUICSV(TUI):
 
     def goto_line(self, args):
         ln = args["lineno"]
-        if ln > self.nlines:
+        if ln > self.nlines or ln < 1:
             self.lwarn(f"Cant goto line {ln}")
             return
 
@@ -533,6 +545,45 @@ class TUICSV(TUI):
         self.tcursor.start.cx = 0
         self.tcursor.end.cx = 0
         self.scroll_to_cursor_end()
+
+    # TODO, WIP, this is not correct, it must check for balanced brackets as well
+    def select_brackets(self):
+        brackets = {"(": ")", "[": "]", "{": "}"}
+
+        sx, sy = self.tcursor.sel_start
+        end_bracket = None
+        start_x = 0
+        pstart_x = 0
+        start_y = sy
+
+        # find the beginning
+        for y in range(sy, len(self.lines)):
+            if end_bracket:
+                break
+            for x in range(sx, len(self.lines[y])):
+                cx = self.lines[y][x]
+                if cx in brackets:
+                    end_bracket = brackets[cx]
+                    start_x = x
+                    start_y = y
+                    pstart_x = x
+                    break
+
+        if not end_bracket:
+            return
+        # find the end
+        for y in range(start_y, len(self.lines)):
+            found = self.lines[y].find(end_bracket, start_x)
+            start_x = 0
+
+            if found != -1:
+                self.tcursor.start.cx = pstart_x
+                self.tcursor.start.cy = start_y
+                self.tcursor.end.cx = found + 1
+                self.tcursor.end.cy = y
+
+                self.scroll_to_cursor_end()
+                return
 
     def eval_py(self):
         if not self.tcursor.is_selection():
@@ -767,8 +818,7 @@ class TUICSV(TUI):
             self.cur_commands = cmd
             self.cur_command_args = {}
             self.cur_command_args_idz = 0
-            self.cur_command_args_inp.value = ""
-            self.cur_command_args_inp.curs = 0
+            self.cur_command_args_inp.reset()
             self.cur_command_args_inp.focused = True
         self.command_pallete_open = False
 
@@ -853,7 +903,10 @@ class TUICSV(TUI):
                         hovering = self.hovering(b)
                         clicking = self.clicking(b)
                         eff = self.command_sel_index == cmd_i and gray_bg
-                        self.add_line(cmd.name, b, 0, effect=eff)
+                        label = cmd.name
+                        if cmd.args:
+                            label += " " + red(dim(str(len(cmd.args))))
+                        self.add_line(label, b, 0, effect=eff)
                         if clicking:
                             self.exec_command(cmd)
                         elif self.mouse.updated and hovering:
@@ -869,7 +922,7 @@ class TUICSV(TUI):
 
                     lineno = next_line(1)
                     for i, arg in enumerate(self.cur_commands.args):
-                        key = arg["name"]
+                        key = arg.name
                         val = self.cur_command_args.get(key)
                         style = noop
                         if i == self.cur_command_args_idz:
@@ -881,11 +934,11 @@ class TUICSV(TUI):
                         self.add_line(f"{style(key.ljust(10))}: {val}", cur_cmdb, next(lineno))
 
                     cur_arg = self.cur_commands.args[self.cur_command_args_idz]
-                    cur_args_titlebar, cur_args_box = cur_cmdb.pad(1).bottom(4)[1].top(1)
-                    self.add_line(cur_arg["name"], cur_args_titlebar, 0, effect=pale_yellow)
+                    cur_args_box = cur_cmdb.pad(1).bottom(3)[1]
 
                     # TODO this feels wrong here
-                    self.cur_command_args_inp.placeholder = cur_arg.get("default")
+                    self.cur_command_args_inp.placeholder = cur_arg.default
+                    self.cur_command_args_inp.title = cur_arg.name
                     self.mount(self.cur_command_args_inp, cur_args_box)
 
         # find
@@ -918,8 +971,7 @@ class TUICSV(TUI):
             self.command_pallete_open = not self.command_pallete_open
             if self.command_pallete_open:
                 self.command_inp.focused = True
-                self.command_inp.value = ""
-                self.command_inp.curs = 0
+                self.command_inp.reset()
                 self.command_sel_index = -1
         if self.command_pallete_open:
             if ch == ESC:
@@ -987,21 +1039,21 @@ class TUICSV(TUI):
         if self.cur_commands:
             if ch == Keys.ESC:
                 self.cur_commands = None
+                self.command_pallete_open = True
+                self.command_inp.focused = True
+                self.command_inp.reset()
+                self.command_sel_index = -1
             if ch == Keys.ENTER:
                 cur_arg = self.cur_commands.args[self.cur_command_args_idz]
                 try:
-                    arg_value = self.cur_command_args_inp.value
-                    if not arg_value and cur_arg.get("default"):
-                        arg_value = cur_arg.get("default")
-                    arg_value = cur_arg.get("proc")(arg_value)
-                    self.cur_command_args[cur_arg["name"]] = arg_value
+                    self.cur_command_args[cur_arg.name] = cur_arg.get_val(self.cur_command_args_inp.value)
 
                     self.cur_command_args_inp.reset()
                     self.cur_command_args_idz += 1
                     if self.cur_command_args_idz >= len(self.cur_commands.args):
                         self.exec_command_with_args()
                 except Exception as e:
-                    self.lwarn(f"Error when processing args {cur_arg['name']} - {repr(e)}")
+                    self.lwarn(f"Error when processing args {cur_arg.name} - {repr(e)}")
             return
 
         if ch == CTRL + "s":
