@@ -137,12 +137,8 @@ class Cursor:
         else:
             ssx, ssy = self.sel_start
             sex, sey = self.sel_end
-            pre = lines[ssy][:ssx]
-            post = lines[sey][sex:]
 
-            new_lines = lines[:ssy] + [pre + post] + lines[sey + 1 :]
-            lines.clear()
-            lines.extend(new_lines)
+            lines[ssy : sey + 1] = [lines[ssy][:ssx] + lines[sey][sex:]]
         self.collapse_to_selstart()
 
     @property
@@ -234,18 +230,10 @@ class Edit:
         return Edit(start=start, plus=b[start:endB], minus=a[start:endA])
 
     def undo(self, buffer: Buffer):
-        for _ in self.plus:
-            buffer.pop(self.start)
-
-        for i, l in enumerate(self.minus):
-            buffer.insert(self.start + i, l)
+        buffer[self.start : len(self.plus)] = self.minus
 
     def redo(self, buffer: Buffer):
-        for _ in self.minus:
-            buffer.pop(self.start)
-
-        for i, l in enumerate(self.plus):
-            buffer.insert(self.start + i, l)
+        buffer[self.start : len(self.minus)] = self.plus
 
     def __str__(self):
         return f"Edit(st={self.start}, p={self.plus and self.plus[0]}, m={self.minus and self.minus[0]})"
@@ -752,14 +740,11 @@ class TUICSV(TUI):
         self.undo_stack = self.undo_stack[-MAX_UNDO_HISTORY_SIZE:]
         self.tokenize()
 
+    @contextmanager
     def transaction(self):
-        @contextmanager
-        def with_transaction():
-            self.start_transaction()
-            yield
-            self.end_transaction()
-
-        return with_transaction()
+        self.start_transaction()
+        yield
+        self.end_transaction()
 
     def undo(self):
         if len(self.undo_stack) == 0:
@@ -963,16 +948,19 @@ class TUICSV(TUI):
                 self.add_line(f"Num token - {len(self.token)}", diag, next(ln))
 
     def on_input(self, ch):
+        # global shortcuts
         if ch == CTRL + "q":
             self.shutdown()
             return
 
+        # toggle command pallete
         if ch == CTRL + "l":
             self.command_pallete_open = not self.command_pallete_open
             if self.command_pallete_open:
                 self.command_inp.focused = True
                 self.command_inp.reset()
                 self.command_sel_index = -1
+        # command pallete shortcuts
         if self.command_pallete_open:
             if ch == ESC:
                 self.command_pallete_open = False
@@ -991,6 +979,7 @@ class TUICSV(TUI):
 
             return
 
+        # toggle find mode
         if ch == CTRL + "f":
             self.find_mode = not self.find_mode
             if self.find_mode:
@@ -1000,6 +989,7 @@ class TUICSV(TUI):
                     ex = max(self.tcursor.start.cx, self.tcursor.end.cx)
                     self.find_inp.value = self.lines[self.cy][sx:ex]
                     self.find_inp.curs = ex - sx
+        # find mode shortcust
         if self.find_mode:
             if ch == ESC:
                 self.find_mode = False
@@ -1036,6 +1026,7 @@ class TUICSV(TUI):
             self.scroll_to_cursor_end()
             return
 
+        # running command with args actions
         if self.cur_commands:
             if ch == Keys.ESC:
                 self.cur_commands = None
@@ -1056,6 +1047,7 @@ class TUICSV(TUI):
                     self.lwarn(f"Error when processing args {cur_arg.name} - {repr(e)}")
             return
 
+        # sadayv actions
         if ch == CTRL + "s":
             self.save()
             return
@@ -1066,8 +1058,8 @@ class TUICSV(TUI):
                 self.load_dir(self.dir)
             return
 
+        # arrow navigation
         with self.error_logging("nav"):
-            # arrow navigation
             if ch == Keys.UP:
                 self.tcursor.up(self.lines)
             elif ch == Keys.DOWN:
@@ -1126,9 +1118,9 @@ class TUICSV(TUI):
             elif ch == SHIFT + Keys.RIGHT:
                 self.tcursor.end.right(self.lines)
 
+        # editing
         with self.transaction():
             with self.error_logging("editing"):
-                # editing
                 if ch == ALT + Keys.UP and not self.tcursor.is_selection() and self.tcursor.end.cy > 0:
                     x = self.tcursor.end.cy
                     self.lines[x], self.lines[x - 1] = self.lines[x - 1], self.lines[x]
@@ -1206,6 +1198,7 @@ class TUICSV(TUI):
                     self.tcursor.end.cy = len(self.lines) - 1
                     self.tcursor.end.cx = len(self.lines[-1])
 
+        # undo/redo
         if ch == CTRL + "g":
             self.undo()
         if ch == CTRL + "y":
