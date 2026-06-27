@@ -4,5 +4,17 @@
       "key": "CTRL + t",
       "cmd": "goto_line"
     }
-  ]
+  ],
+  "theme": {
+    "control": "rgb(94, 129, 172)",
+    "declaration": "rgb(191, 97, 106)",
+    "context": "rgb(136, 200, 140)",
+    "literal": "rgb(208, 135, 112)",
+    "string": "rgb(163, 190, 140)",
+    "numeric": "rgb(180, 142, 173)",
+    "operator": "rgb(236, 239, 244)",
+    "comment": "rgb(106, 115, 117)",
+    "variable": "rgb(143, 188, 187)",
+    "punctuation": "rgb(236, 239, 244)"
+  }
 }

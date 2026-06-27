@@ -445,16 +445,16 @@ none_grammar = Grammar("none")
 none_grammar.add_rule(TokenTypes.PUNCTUATION, r".*")
 
 COLOR_SCHEME = {
-    TokenTypes.CONTROL: rgb(94, 129, 172),  # Nord Blue (#5E81AC)
-    TokenTypes.DECLARATION: rgb(191, 97, 106),  # Nord Red (#BF616A)
-    TokenTypes.CONTEXT: rgb(136, 200, 140),  # Nord Light Green
-    TokenTypes.LITERAL: rgb(208, 135, 112),  # Nord Orange (#D08770)
-    TokenTypes.STRING: rgb(163, 190, 140),  # Nord Green (#A3BE8C)
-    TokenTypes.NUMERIC: rgb(180, 142, 173),  # Nord Purple (#B48EAD)
-    TokenTypes.OPERATOR: rgb(236, 239, 244),  # Nord Snow 2 (#ECEFF4)
-    TokenTypes.COMMENT: rgb(106, 115, 117),  # Nord Blue Gray (#81A1C1)
-    TokenTypes.VARIABLE: rgb(143, 188, 187),  # Nord Cyan (#8FBCBB)
-    TokenTypes.PUNCTUATION: rgb(236, 239, 244),  # Nord Snow 2 (#ECEFF4)
+    # TokenTypes.CONTROL: rgb(94, 129, 172),  # Nord Blue (#5E81AC)
+    # TokenTypes.DECLARATION: rgb(191, 97, 106),  # Nord Red (#BF616A)
+    # TokenTypes.CONTEXT: rgb(136, 200, 140),  # Nord Light Green
+    # TokenTypes.LITERAL: rgb(208, 135, 112),  # Nord Orange (#D08770)
+    # TokenTypes.STRING: rgb(163, 190, 140),  # Nord Green (#A3BE8C)
+    # TokenTypes.NUMERIC: rgb(180, 142, 173),  # Nord Purple (#B48EAD)
+    # TokenTypes.OPERATOR: rgb(236, 239, 244),  # Nord Snow 2 (#ECEFF4)
+    # TokenTypes.COMMENT: rgb(106, 115, 117),  # Nord Blue Gray (#81A1C1)
+    # TokenTypes.VARIABLE: rgb(143, 188, 187),  # Nord Cyan (#8FBCBB)
+    # TokenTypes.PUNCTUATION: rgb(236, 239, 244),  # Nord Snow 2 (#ECEFF4)
 }
 
 
@@ -558,6 +558,15 @@ class TUICSV(TUI):
                     self.shortcuts.append({"key": ke, "cmd": c})
                     self.ldebug(f"loaded shortcut => {ke}, {cmd=}")
                     break
+
+        theme = conf.get("theme")
+        if theme:
+            for k, v in theme.items():
+                try:
+                    COLOR_SCHEME[k] = eval(v, globals(), locals())
+                except:
+                    self.lwarn(f"Error loading color scheme: key = {k}, value = {v}")
+            self.ldebug("custom color scheme loaded")
 
     def goto_line(self, args):
         ln = args["lineno"]
