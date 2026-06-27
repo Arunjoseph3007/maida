@@ -4,6 +4,7 @@ from typing import List, Any
 from contextlib import contextmanager
 from io import StringIO
 import base64
+import json
 import pathlib
 import re
 import os
@@ -230,10 +231,10 @@ class Edit:
         return Edit(start=start, plus=b[start:endB], minus=a[start:endA])
 
     def undo(self, buffer: Buffer):
-        buffer[self.start : len(self.plus)] = self.minus
+        buffer[self.start : self.start + len(self.plus)] = self.minus
 
     def redo(self, buffer: Buffer):
-        buffer[self.start : len(self.minus)] = self.plus
+        buffer[self.start : self.start + len(self.minus)] = self.plus
 
     def __str__(self):
         return f"Edit(st={self.start}, p={self.plus and self.plus[0]}, m={self.minus and self.minus[0]})"
@@ -521,6 +522,42 @@ class TUICSV(TUI):
         self.find_mode = False
         self.find_inp = InputWG("find_query")
         self.last_found = Anchor()
+
+        self.load_config()
+
+    def load_config(self):
+        conf_file = "./config.json"
+        conf = None
+        with open(conf_file) as f:
+            conf = json.load(f)
+        if not conf:
+            return
+
+        self.shortcuts = []
+        for shortcut in conf.get("shortcuts", []):
+            key: str = shortcut.get("key")
+            cmd: str = shortcut.get("cmd")
+            segs = [k.strip() for k in key.split("+")]
+
+            ke = KeyEvent(None)
+
+            for seg in segs:
+                if seg == "CTRL":
+                    ke.ctrl = True
+                elif seg == "SHIFT":
+                    ke.shift = True
+                elif seg == "ALT":
+                    ke.alt = True
+                elif len(seg) > 1:
+                    ke.key = Keys(seg)
+                else:
+                    ke.key = seg
+
+            for c in self.commands:
+                if cmd == c.name:
+                    self.shortcuts.append({"key": ke, "cmd": c})
+                    self.ldebug(f"loaded shortcut => {ke}, {cmd=}")
+                    break
 
     def goto_line(self, args):
         ln = args["lineno"]
@@ -1057,6 +1094,12 @@ class TUICSV(TUI):
             if self.dir:
                 self.load_dir(self.dir)
             return
+
+        # user shortcuts
+        for sh in self.shortcuts:
+            if ch == sh["key"]:
+                self.exec_command(sh["cmd"])
+                return
 
         # arrow navigation
         with self.error_logging("nav"):

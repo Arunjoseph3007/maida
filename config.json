@@ -1,0 +1,8 @@
+{
+  "shortcuts": [
+    {
+      "key": "CTRL + t",
+      "cmd": "goto_line"
+    }
+  ]
+}
