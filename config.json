@@ -16,5 +16,182 @@
     "comment": "rgb(106, 115, 117)",
     "variable": "rgb(143, 188, 187)",
     "punctuation": "rgb(236, 239, 244)"
+  },
+  "grammars": {
+    "python": {
+      "supported_extensions": "py",
+      "rules": [
+        {
+          "name": "comment",
+          "start_match": "#.*",
+          "end_match": null
+        },
+        {
+          "name": "control",
+          "start_match": "\\b(break|continue|elif|else|except|finally|for|if|pass|raise|return|try|while|with|yield)\\b",
+          "end_match": null
+        },
+        {
+          "name": "declaration",
+          "start_match": "\\b(def|class|lambda|async|await)\\b",
+          "end_match": null
+        },
+        {
+          "name": "context",
+          "start_match": "\\b(self|cls|super|import|from|as|global|nonlocal|del|assert)\\b",
+          "end_match": null
+        },
+        {
+          "name": "literal",
+          "start_match": "\\b(True|False|None)\\b",
+          "end_match": null
+        },
+        {
+          "name": "string",
+          "start_match": "\"\"\"",
+          "end_match": "\"\"\""
+        },
+        {
+          "name": "string",
+          "start_match": "'''",
+          "end_match": "'''"
+        },
+        {
+          "name": "string",
+          "start_match": "\"",
+          "end_match": "\""
+        },
+        {
+          "name": "string",
+          "start_match": "'",
+          "end_match": "'"
+        },
+        {
+          "name": "numeric",
+          "start_match": "\\b(?:0[bB][01]+|0[oO][0-7]+|0[xX][\\dA-Fa-f]+|\\d+(\\.\\d+)?([eE][+-]?\\d+)?|\\.\\d+([eE][+-]?\\d+)?)[jJ]?\\b",
+          "end_match": null
+        },
+        {
+          "name": "operator",
+          "start_match": "(//=|>>=|<<=|\\*\\*=|//|\\*\\*|<<|>>|==|!=|<=|>=|<|>|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|@=|->|:=|=|\\+|-|\\*|/|%|&|\\||\\^|~|@|\\.\\.\\.|\\bnot\\b|\\band\\b|\\bor\\b|\\bin\\b|\\bis\\b)",
+          "end_match": null
+        },
+        {
+          "name": "variable",
+          "start_match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b",
+          "end_match": null
+        },
+        {
+          "name": "punctuation",
+          "start_match": "[.,;:()[\\]{}]",
+          "end_match": null
+        }
+      ]
+    },
+    "javascript": {
+      "supported_extensions": ["js", "ts", "json"],
+      "rules": [
+        {
+          "name": "comment",
+          "start_match": "\\/\\/.*",
+          "end_match": null
+        },
+        {
+          "name": "comment",
+          "start_match": "\\/\\*",
+          "end_match": "\\*\\/"
+        },
+        {
+          "name": "control",
+          "start_match": "\\b(break|case|catch|continue|default|do|else|finally|for|if|return|switch|throw|try|while|with)\\b",
+          "end_match": null
+        },
+        {
+          "name": "declaration",
+          "start_match": "\\b(var|let|const|function|class)\\b",
+          "end_match": null
+        },
+        {
+          "name": "context",
+          "start_match": "\\b(this|super|new|delete|typeof|void|yield|await|import|export)\\b",
+          "end_match": null
+        },
+        {
+          "name": "literal",
+          "start_match": "\\b(true|false|null)\\b",
+          "end_match": null
+        },
+        {
+          "name": "string",
+          "start_match": "\\\"",
+          "end_match": "\\\""
+        },
+        {
+          "name": "string",
+          "start_match": "'",
+          "end_match": "'"
+        },
+        {
+          "name": "string",
+          "start_match": "`",
+          "end_match": "`"
+        },
+        {
+          "name": "numeric",
+          "start_match": "\\b(?:0[bB][01]+|0[oO][0-7]+|0[xX][\\dA-Fa-f]+|\\d+(\\.\\d+)?([eE][+-]?\\d+)?|\\.\\d+([eE][+-]?\\d+)?)\\b",
+          "end_match": null
+        },
+        {
+          "name": "operator",
+          "start_match": "(\\+\\+|--|===|==|!==|!=|<=|>=|<|>|\\+=|-=|\\*=|\\/=|%=|\\*\\*|&&|\\|\\||!|=|\\+|-|\\*|\\/|%|\\*\\*=|&=|\\|=|\\^=|<<=|>>=|>>>=|&|\\||\\^|~|<<|>>|>>>|\\?|:|=>)",
+          "end_match": null
+        },
+        {
+          "name": "variable",
+          "start_match": "\\b[a-zA-Z_$][a-zA-Z0-9_$]*\\b",
+          "end_match": null
+        },
+        {
+          "name": "punctuation",
+          "start_match": "[.,;()[\\]{}]",
+          "end_match": null
+        }
+      ]
+    },
+    "markdown": {
+      "supported_extensions": ["md"],
+      "rules": [
+        {
+          "name": "declaration",
+          "start_match": "^#+ .*$",
+          "end_match": null
+        },
+        {
+          "name": "control",
+          "start_match": "\\*.*\\*",
+          "end_match": null
+        },
+        {
+          "name": "context",
+          "start_match": "\\*\\*.*\\*\\*",
+          "end_match": null
+        },
+        {
+          "name": "numeric",
+          "start_match": "\\[\\w+\\]",
+          "end_match": null
+        },
+        {
+          "name": "literal",
+          "start_match": "```",
+          "end_match": "```"
+        },
+        {
+          "name": "punctuation",
+          "start_match": "(\\s|\\w+)",
+          "end_match": null
+        }
+      ]
+    }
   }
 }

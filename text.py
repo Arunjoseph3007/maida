@@ -280,13 +280,15 @@ class GrammarMatch:
 class Grammar:
     patterns: List[GrammarRule]
     name: str
+    supported_extentions: List[str]
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, exts: List[str] = []):
         self.patterns = []
         self.name = name
+        self.supported_extentions = exts
 
-    def add_rule(self, name, start, end=None):
-        self.patterns.append(GrammarRule(name, start, end))
+    def add_rule(self, name, start_match, end_match=None):
+        self.patterns.append(GrammarRule(name, start_match, end_match))
 
     def parse_text_buffer(self, tb: list[str]) -> list[GrammarMatch]:
         result = []
@@ -362,99 +364,20 @@ class Grammar:
         return result
 
 
-def jsGrammar():
-    js = Grammar("js")
-
-    js.add_rule(TokenTypes.COMMENT, r"\/\/.*")
-    js.add_rule(TokenTypes.COMMENT, r"\/\*", r"\*\/")
-
-    js.add_rule(
-        TokenTypes.CONTROL,
-        r"\b(break|case|catch|continue|default|do|else|finally|for|if|return|switch|throw|try|while|with)\b",
-    )
-    js.add_rule(TokenTypes.DECLARATION, r"\b(var|let|const|function|class)\b")
-    js.add_rule(TokenTypes.CONTEXT, r"\b(this|super|new|delete|typeof|void|yield|await|import|export)\b")
-    js.add_rule(TokenTypes.LITERAL, r"\b(true|false|null)\b")
-
-    js.add_rule(TokenTypes.STRING, r"\"", r"\"")
-    js.add_rule(TokenTypes.STRING, r"'", r"'")
-    js.add_rule(TokenTypes.STRING, r"`", r"`")
-
-    js.add_rule(
-        TokenTypes.NUMERIC,
-        r"\b(?:0[bB][01]+|0[oO][0-7]+|0[xX][\dA-Fa-f]+|\d+(\.\d+)?([eE][+-]?\d+)?|\.\d+([eE][+-]?\d+)?)\b",
-    )
-    js.add_rule(
-        TokenTypes.OPERATOR,
-        r"(\+\+|--|===|==|!==|!=|<=|>=|<|>|\+=|-=|\*=|\/=|%=|\*\*|&&|\|\||!|=|\+|-|\*|\/|%|\*\*=|&=|\|=|\^=|<<=|>>=|>>>=|&|\||\^|~|<<|>>|>>>|\?|:|=>)",
-    )
-    js.add_rule(TokenTypes.VARIABLE, r"\b[a-zA-Z_$][a-zA-Z0-9_$]*\b")
-    js.add_rule(TokenTypes.PUNCTUATION, r"[.,;()[\]{}]")
-
-    return js
-
-
-def pythonGrammar():
-    py = Grammar("python")
-
-    py.add_rule(TokenTypes.COMMENT, r"#.*")
-
-    py.add_rule(
-        TokenTypes.CONTROL,
-        r"\b(break|continue|elif|else|except|finally|for|if|pass|raise|return|try|while|with|yield)\b",
-    )
-    py.add_rule(TokenTypes.DECLARATION, r"\b(def|class|lambda|async|await)\b")
-    py.add_rule(TokenTypes.CONTEXT, r"\b(self|cls|super|import|from|as|global|nonlocal|del|assert)\b")
-    py.add_rule(TokenTypes.LITERAL, r"\b(True|False|None)\b")
-
-    py.add_rule(TokenTypes.STRING, r'"""', r'"""')
-    py.add_rule(TokenTypes.STRING, r"'''", r"'''")
-    py.add_rule(TokenTypes.STRING, r'"', r'"')
-    py.add_rule(TokenTypes.STRING, r"'", r"'")
-
-    py.add_rule(
-        TokenTypes.NUMERIC,
-        r"\b(?:0[bB][01]+|0[oO][0-7]+|0[xX][\dA-Fa-f]+|\d+(\.\d+)?([eE][+-]?\d+)?|\.\d+([eE][+-]?\d+)?)[jJ]?\b",
-    )
-    py.add_rule(
-        TokenTypes.OPERATOR,
-        r"(//=|>>=|<<=|\*\*=|//|\*\*|<<|>>|==|!=|<=|>=|<|>|\+=|-=|\*=|/=|%=|&=|\|=|\^=|@=|->|:=|=|\+|-|\*|/|%|&|\||\^|~|@|\.\.\.|\bnot\b|\band\b|\bor\b|\bin\b|\bis\b)",
-    )
-    py.add_rule(TokenTypes.VARIABLE, r"\b[a-zA-Z_][a-zA-Z0-9_]*\b")
-    py.add_rule(TokenTypes.PUNCTUATION, r"[.,;:()[\]{}]")
-
-    return py
-
-
-def mdGrammar():
-    md = Grammar("markdown")
-    md.add_rule(TokenTypes.DECLARATION, r"^#+ .*$")  # heading
-    md.add_rule(TokenTypes.CONTROL, r"\*.*\*")  # bold
-    md.add_rule(TokenTypes.CONTEXT, r"\*\*.*\*\*")  # italics
-    md.add_rule(TokenTypes.NUMERIC, r"\[\w+\]")  # links
-    md.add_rule(TokenTypes.LITERAL, r"```", r"```")  # code block
-
-    md.add_rule(TokenTypes.PUNCTUATION, r"(\s|\w+)")  # catch all
-    return md
-
-
-js_grammar = jsGrammar()
-py_grammar = pythonGrammar()
-md_grammar = mdGrammar()
 none_grammar = Grammar("none")
 none_grammar.add_rule(TokenTypes.PUNCTUATION, r".*")
 
 COLOR_SCHEME = {
-    # TokenTypes.CONTROL: rgb(94, 129, 172),  # Nord Blue (#5E81AC)
-    # TokenTypes.DECLARATION: rgb(191, 97, 106),  # Nord Red (#BF616A)
-    # TokenTypes.CONTEXT: rgb(136, 200, 140),  # Nord Light Green
-    # TokenTypes.LITERAL: rgb(208, 135, 112),  # Nord Orange (#D08770)
-    # TokenTypes.STRING: rgb(163, 190, 140),  # Nord Green (#A3BE8C)
-    # TokenTypes.NUMERIC: rgb(180, 142, 173),  # Nord Purple (#B48EAD)
-    # TokenTypes.OPERATOR: rgb(236, 239, 244),  # Nord Snow 2 (#ECEFF4)
-    # TokenTypes.COMMENT: rgb(106, 115, 117),  # Nord Blue Gray (#81A1C1)
-    # TokenTypes.VARIABLE: rgb(143, 188, 187),  # Nord Cyan (#8FBCBB)
-    # TokenTypes.PUNCTUATION: rgb(236, 239, 244),  # Nord Snow 2 (#ECEFF4)
+    TokenTypes.CONTROL: rgb(94, 129, 172),  # Nord Blue (#5E81AC)
+    TokenTypes.DECLARATION: rgb(191, 97, 106),  # Nord Red (#BF616A)
+    TokenTypes.CONTEXT: rgb(136, 200, 140),  # Nord Light Green
+    TokenTypes.LITERAL: rgb(208, 135, 112),  # Nord Orange (#D08770)
+    TokenTypes.STRING: rgb(163, 190, 140),  # Nord Green (#A3BE8C)
+    TokenTypes.NUMERIC: rgb(180, 142, 173),  # Nord Purple (#B48EAD)
+    TokenTypes.OPERATOR: rgb(236, 239, 244),  # Nord Snow 2 (#ECEFF4)
+    TokenTypes.COMMENT: rgb(106, 115, 117),  # Nord Blue Gray (#81A1C1)
+    TokenTypes.VARIABLE: rgb(143, 188, 187),  # Nord Cyan (#8FBCBB)
+    TokenTypes.PUNCTUATION: rgb(236, 239, 244),  # Nord Snow 2 (#ECEFF4)
 }
 
 
@@ -493,6 +416,7 @@ class TUICSV(TUI):
         self.redo_stack: Histroy = []
         self.transaction_ref_count = 0
 
+        self.grammar_library: List[Grammar] = []
         self.grammar = none_grammar
         self.token: List[GrammarMatch] = []
         path = pathlib.Path(name)
@@ -533,6 +457,7 @@ class TUICSV(TUI):
         if not conf:
             return
 
+        # load shortcuts
         self.shortcuts = []
         for shortcut in conf.get("shortcuts", []):
             key: str = shortcut.get("key")
@@ -559,6 +484,7 @@ class TUICSV(TUI):
                     self.ldebug(f"loaded shortcut => {ke}, {cmd=}")
                     break
 
+        # load theme
         theme = conf.get("theme")
         if theme:
             for k, v in theme.items():
@@ -567,6 +493,17 @@ class TUICSV(TUI):
                 except:
                     self.lwarn(f"Error loading color scheme: key = {k}, value = {v}")
             self.ldebug("custom color scheme loaded")
+
+        # load grammars
+        grammars = conf.get("grammars")
+        if grammars:
+            for name, gr_conf in grammars.items():
+                gr = Grammar(name, gr_conf.get("supported_extensions", []))
+                for r in gr_conf.get("rules", []):
+                    gr.add_rule(**r)
+
+                self.ldebug(f"loaded grammar: {gr.name} with {len(gr.patterns)} rules")
+                self.grammar_library.append(gr)
 
     def goto_line(self, args):
         ln = args["lineno"]
@@ -710,15 +647,11 @@ class TUICSV(TUI):
         self.old_lines = [""]
 
         extension = self.file.name.split(".")[-1]
-        match extension:
-            case "py":
-                self.grammar = py_grammar
-            case "js" | "json":
-                self.grammar = js_grammar
-            case "md":
-                self.grammar = md_grammar
-            case _:
-                self.grammar = none_grammar
+        self.grammar = none_grammar
+        for gr in self.grammar_library:
+            if extension in gr.supported_extentions:
+                self.grammar = gr
+                break
 
         try:
             with open(self.file) as f:
@@ -1000,7 +933,7 @@ class TUICSV(TUI):
             return
 
         # toggle command pallete
-        if ch == CTRL + "l":
+        if ch == CTRL + "p":
             self.command_pallete_open = not self.command_pallete_open
             if self.command_pallete_open:
                 self.command_inp.focused = True
@@ -1251,7 +1184,7 @@ class TUICSV(TUI):
                     self.tcursor.end.cx = len(self.lines[-1])
 
         # undo/redo
-        if ch == CTRL + "g":
+        if ch == CTRL + "z":
             self.undo()
         if ch == CTRL + "y":
             self.redo()
