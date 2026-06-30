@@ -406,22 +406,6 @@ class Command:
 class TUICSV(TUI):
     def __init__(self, name):
         super().__init__(fps=30, mouse_mode=MouseMode.ALL_SGR)
-        self.lines: Buffer = [""]
-        self.old_lines: Buffer = [""]
-        self.tcursor = Cursor()
-        self.old_tcursor = Cursor()
-        self.scroll = 0
-        self.box_height = 0
-        self.undo_stack: Histroy = []
-        self.redo_stack: Histroy = []
-        self.transaction_ref_count = 0
-
-        self.grammar_library: List[Grammar] = []
-        self.grammar = none_grammar
-        self.token: List[GrammarMatch] = []
-        path = pathlib.Path(name)
-        self.load_path(path)
-
         self.commands: List[Command] = [
             Command("uppercase", lambda: self.apply_on_selection(str.upper)),
             Command("lowercase", lambda: self.apply_on_selection(str.lower)),
@@ -443,11 +427,27 @@ class TUICSV(TUI):
         self.cur_command_args_idz = -1
         self.cur_command_args_inp = InputWG("cur_arg")
 
+        self.grammar_library: List[Grammar] = []
+        self.grammar = none_grammar
+        self.load_config()
+
+        self.lines: Buffer = [""]
+        self.old_lines: Buffer = [""]
+        self.tcursor = Cursor()
+        self.old_tcursor = Cursor()
+        self.scroll = 0
+        self.box_height = 0
+        self.undo_stack: Histroy = []
+        self.redo_stack: Histroy = []
+        self.transaction_ref_count = 0
+
+        self.token: List[GrammarMatch] = []
+        path = pathlib.Path(name)
+        self.load_path(path)
+
         self.find_mode = False
         self.find_inp = InputWG("find_query")
         self.last_found = Anchor()
-
-        self.load_config()
 
     def load_config(self):
         conf_file = "./config.json"
@@ -661,7 +661,8 @@ class TUICSV(TUI):
             self.lwarn(f"Error when reading file {path}, File might be binary")
 
     def tokenize(self):
-        self.token = self.grammar.parse_text_buffer(self.lines)
+        with self.timeit("tokenize"):
+            self.token = self.grammar.parse_text_buffer(self.lines)
 
     @property
     def filtered_commands(self):
@@ -849,72 +850,69 @@ class TUICSV(TUI):
 
         # command pallete
         if self.command_pallete_open:
-            with self.error_logging("pallete"):
-                with self.withz(100):
-                    cur_cmdb = self.box.centered(80, 20)
-                    self.clean_box(cur_cmdb)
-                    self.draw_box(cur_cmdb)
+            with self.error_logging("pallete"), self.withz(100):
+                cur_cmdb = self.box.centered(80, 20)
+                self.clean_box(cur_cmdb)
+                self.draw_box(cur_cmdb)
 
-                    ln = next_line(1)
-                    self.add_line("Command Pallete", cur_cmdb, next(ln), align=TextAlign.CENTER, effect=pale_yellow)
+                ln = next_line(1)
+                self.add_line("Command Pallete", cur_cmdb, next(ln), align=TextAlign.CENTER, effect=pale_yellow)
 
-                    rest = cur_cmdb.pad(top=2)
-                    inputb, rest = rest.top(3)
-                    self.mount(self.command_inp, inputb.pad(x=1))
+                rest = cur_cmdb.pad(top=2)
+                inputb, rest = rest.top(3)
+                self.mount(self.command_inp, inputb.pad(x=1))
 
-                    for cmd_i, cmd in enumerate(self.filtered_commands):
-                        b, rest = rest.top(1)
-                        hovering = self.hovering(b)
-                        clicking = self.clicking(b)
-                        eff = self.command_sel_index == cmd_i and gray_bg
-                        label = cmd.name
-                        if cmd.args:
-                            label += " " + red(dim(str(len(cmd.args))))
-                        self.add_line(label, b, 0, effect=eff)
-                        if clicking:
-                            self.exec_command(cmd)
-                        elif self.mouse.updated and hovering:
-                            self.command_sel_index = cmd_i
+                for cmd_i, cmd in enumerate(self.filtered_commands):
+                    b, rest = rest.top(1)
+                    hovering = self.hovering(b)
+                    clicking = self.clicking(b)
+                    eff = self.command_sel_index == cmd_i and gray_bg
+                    label = cmd.name
+                    if cmd.args:
+                        label += " " + red(dim(str(len(cmd.args))))
+                    self.add_line(label, b, 0, effect=eff)
+                    if clicking:
+                        self.exec_command(cmd)
+                    elif self.mouse.updated and hovering:
+                        self.command_sel_index = cmd_i
 
         # running command
         if self.cur_commands:
-            with self.error_logging("cur_command"):
-                with self.withz(100):
-                    cur_cmdb = self.box.centered(80, 20)
-                    self.clean_box(cur_cmdb)
-                    self.draw_box(cur_cmdb)
+            with self.error_logging("cur_command"), self.withz(100):
+                cur_cmdb = self.box.centered(80, 20)
+                self.clean_box(cur_cmdb)
+                self.draw_box(cur_cmdb)
 
-                    lineno = next_line(1)
-                    for i, arg in enumerate(self.cur_commands.args):
-                        key = arg.name
-                        val = self.cur_command_args.get(key)
-                        style = noop
-                        if i == self.cur_command_args_idz:
-                            style = cyan
-                            val = self.cur_command_args_inp.value
-                        if i > self.cur_command_args_idz:
-                            style = dim
-                            val = dim("-")
-                        self.add_line(f"{style(key.ljust(10))}: {val}", cur_cmdb, next(lineno))
+                lineno = next_line(1)
+                for i, arg in enumerate(self.cur_commands.args):
+                    key = arg.name
+                    val = self.cur_command_args.get(key)
+                    style = noop
+                    if i == self.cur_command_args_idz:
+                        style = cyan
+                        val = self.cur_command_args_inp.value
+                    if i > self.cur_command_args_idz:
+                        style = dim
+                        val = dim("-")
+                    self.add_line(f"{style(key.ljust(10))}: {val}", cur_cmdb, next(lineno))
 
-                    cur_arg = self.cur_commands.args[self.cur_command_args_idz]
-                    cur_args_box = cur_cmdb.pad(1).bottom(3)[1]
+                cur_arg = self.cur_commands.args[self.cur_command_args_idz]
+                cur_args_box = cur_cmdb.pad(1).bottom(3)[1]
 
-                    # TODO this feels wrong here
-                    self.cur_command_args_inp.placeholder = cur_arg.default
-                    self.cur_command_args_inp.title = cur_arg.name
-                    self.mount(self.cur_command_args_inp, cur_args_box)
+                # TODO this feels wrong here
+                self.cur_command_args_inp.placeholder = cur_arg.default
+                self.cur_command_args_inp.title = cur_arg.name
+                self.mount(self.cur_command_args_inp, cur_args_box)
 
         # find
         if self.find_mode:
-            with self.error_logging("find"):
-                with self.withz(100):
-                    fb = self.box.bottom_right(50, 3)
-                    self.mount(self.find_inp, fb)
+            with self.error_logging("find"), self.withz(100):
+                fb = self.box.bottom_right(50, 3)
+                self.mount(self.find_inp, fb)
 
         # diag
         if self.display_diagnostics:
-            with self.error_logging("diag"):
+            with self.error_logging("diag"), self.withz(100):
                 diag = box.bottom_right(30, 10)
                 ln = next_line(1)
                 self.draw_box(diag)
@@ -1104,84 +1102,83 @@ class TUICSV(TUI):
                 self.tcursor.end.right(self.lines)
 
         # editing
-        with self.transaction():
-            with self.error_logging("editing"):
-                if ch == ALT + Keys.UP and not self.tcursor.is_selection() and self.tcursor.end.cy > 0:
-                    x = self.tcursor.end.cy
-                    self.lines[x], self.lines[x - 1] = self.lines[x - 1], self.lines[x]
-                    self.tcursor.up(self.lines)
-                elif ch == ALT + Keys.DOWN and not self.tcursor.is_selection() and self.tcursor.end.cy < self.nlines - 1:
-                    x = self.tcursor.end.cy + 1
-                    self.lines[x], self.lines[x - 1] = self.lines[x - 1], self.lines[x]
-                    self.tcursor.down(self.lines)
+        with self.transaction(), self.error_logging("editing"):
+            if ch == ALT + Keys.UP and not self.tcursor.is_selection() and self.tcursor.end.cy > 0:
+                x = self.tcursor.end.cy
+                self.lines[x], self.lines[x - 1] = self.lines[x - 1], self.lines[x]
+                self.tcursor.up(self.lines)
+            elif ch == ALT + Keys.DOWN and not self.tcursor.is_selection() and self.tcursor.end.cy < self.nlines - 1:
+                x = self.tcursor.end.cy + 1
+                self.lines[x], self.lines[x - 1] = self.lines[x - 1], self.lines[x]
+                self.tcursor.down(self.lines)
 
-                elif ch.isprintable():
-                    self.cursor_regulate()
-                    if self.tcursor.is_selection():
-                        self.tcursor.empty_selection(self.lines)
-                    self.lines[self.cy] = self.lines[self.cy][: self.cx] + ch.key + self.lines[self.cy][self.cx :]
-                    self.tcursor.right(self.lines)
-                elif ch == Keys.BACKSPACE:
-                    self.backspace()
-                elif ch == CTRL + Keys.BACKSPACE:
-                    self.cursor_regulate()
-                    self.backspace()
-                    if not self.tcursor.is_selection():
-                        while self.cx > 0 and self.lines[self.cy][self.cx - 1].isalpha():
-                            self.backspace()
-                elif ch == Keys.DEL:
-                    self.delete()
-                elif ch == CTRL + Keys.DEL:
-                    self.cursor_regulate()
-                    self.delete()
-                    if not self.tcursor.is_selection():
-                        while self.cx <= len(self.cline) and self.lines[self.cy][self.cx].isalpha():
-                            self.delete()
-                elif ch == Keys.ENTER:
-                    self.cursor_regulate()
-                    if self.tcursor.is_selection():
-                        self.tcursor.empty_selection(self.lines)
-                    pre = self.lines[self.cy][: self.cx]
-                    post = self.lines[self.cy][self.cx :]
-                    self.lines[self.cy] = pre
-                    self.lines.insert(self.cy + 1, post)
-                    self.tcursor.down(self.lines)
-                elif ch == CTRL + "c":
-                    if self.tcursor.is_selection():
-                        text = self.tcursor.get_selection_text(self.lines)
+            elif ch.isprintable():
+                self.cursor_regulate()
+                if self.tcursor.is_selection():
+                    self.tcursor.empty_selection(self.lines)
+                self.lines[self.cy] = self.lines[self.cy][: self.cx] + ch.key + self.lines[self.cy][self.cx :]
+                self.tcursor.right(self.lines)
+            elif ch == Keys.BACKSPACE:
+                self.backspace()
+            elif ch == CTRL + Keys.BACKSPACE:
+                self.cursor_regulate()
+                self.backspace()
+                if not self.tcursor.is_selection():
+                    while self.cx > 0 and self.lines[self.cy][self.cx - 1].isalpha():
+                        self.backspace()
+            elif ch == Keys.DEL:
+                self.delete()
+            elif ch == CTRL + Keys.DEL:
+                self.cursor_regulate()
+                self.delete()
+                if not self.tcursor.is_selection():
+                    while self.cx <= len(self.cline) and self.lines[self.cy][self.cx].isalpha():
+                        self.delete()
+            elif ch == Keys.ENTER:
+                self.cursor_regulate()
+                if self.tcursor.is_selection():
+                    self.tcursor.empty_selection(self.lines)
+                pre = self.lines[self.cy][: self.cx]
+                post = self.lines[self.cy][self.cx :]
+                self.lines[self.cy] = pre
+                self.lines.insert(self.cy + 1, post)
+                self.tcursor.down(self.lines)
+            elif ch == CTRL + "c":
+                if self.tcursor.is_selection():
+                    text = self.tcursor.get_selection_text(self.lines)
+                else:
+                    text = self.lines[self.cy]
+                text = text.encode()
+                encoded = base64.b64encode(text).decode()
+                sys.stdout.write(f"\x1b]52;c;{encoded}\007")
+                sys.stdout.flush()
+            elif ch == CTRL + "x":
+                if self.tcursor.is_selection():
+                    text = self.tcursor.get_selection_text(self.lines)
+                    self.tcursor.empty_selection(self.lines)
+                else:
+                    text = self.lines[self.cy]
+                    if len(self.lines) > 0:
+                        self.lines.pop(self.cy)
                     else:
-                        text = self.lines[self.cy]
-                    text = text.encode()
-                    encoded = base64.b64encode(text).decode()
-                    sys.stdout.write(f"\x1b]52;c;{encoded}\007")
-                    sys.stdout.flush()
-                elif ch == CTRL + "x":
-                    if self.tcursor.is_selection():
-                        text = self.tcursor.get_selection_text(self.lines)
-                        self.tcursor.empty_selection(self.lines)
-                    else:
-                        text = self.lines[self.cy]
-                        if len(self.lines) > 0:
-                            self.lines.pop(self.cy)
-                        else:
-                            self.lines = [""]
+                        self.lines = [""]
 
-                        if self.cy >= self.nlines:
-                            self.tcursor.up(self.lines)
-                    text = text.encode()
-                    encoded = base64.b64encode(text).decode()
-                    sys.stdout.write(f"\x1b]52;c;{encoded}\007")
-                    sys.stdout.flush()
-                elif ch == ALT + SHIFT + Keys.UP and not self.tcursor.is_selection():
-                    self.lines.insert(self.cy, self.lines[self.cy])
-                elif ch == ALT + SHIFT + Keys.DOWN and not self.tcursor.is_selection():
-                    self.lines.insert(self.cy, self.lines[self.cy])
-                    self.tcursor.down(self.lines)
-                elif ch == CTRL + "a":
-                    self.tcursor.start.cy = 0
-                    self.tcursor.start.cx = 0
-                    self.tcursor.end.cy = len(self.lines) - 1
-                    self.tcursor.end.cx = len(self.lines[-1])
+                    if self.cy >= self.nlines:
+                        self.tcursor.up(self.lines)
+                text = text.encode()
+                encoded = base64.b64encode(text).decode()
+                sys.stdout.write(f"\x1b]52;c;{encoded}\007")
+                sys.stdout.flush()
+            elif ch == ALT + SHIFT + Keys.UP and not self.tcursor.is_selection():
+                self.lines.insert(self.cy, self.lines[self.cy])
+            elif ch == ALT + SHIFT + Keys.DOWN and not self.tcursor.is_selection():
+                self.lines.insert(self.cy, self.lines[self.cy])
+                self.tcursor.down(self.lines)
+            elif ch == CTRL + "a":
+                self.tcursor.start.cy = 0
+                self.tcursor.start.cx = 0
+                self.tcursor.end.cy = len(self.lines) - 1
+                self.tcursor.end.cx = len(self.lines[-1])
 
         # undo/redo
         if ch == CTRL + "z":

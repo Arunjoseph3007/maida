@@ -570,6 +570,14 @@ class TUI(abc.ABC):
         yield
         self.zreset(oldz)
 
+    @contextmanager
+    def timeit(self, title: str):
+        st = datetime.datetime.now()
+        yield
+        en = datetime.datetime.now()
+        dt = en - st
+        self.linfo(f"[TIME] [{title}] Completed in {round(dt.microseconds/1000, 2)} ms")
+
     def shutdown(self):
         self.running = False
 
