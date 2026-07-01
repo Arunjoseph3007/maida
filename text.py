@@ -11,15 +11,11 @@ import pathlib
 import re
 import os
 import sys
+
+_WS = re.compile(r"[ \r\t]+")
 import time
 
 Buffer = List[str]
-
-
-def dir_entry_sort(k: os.DirEntry[str]):
-    if k.is_dir():
-        return "0" + k.name
-    return "1" + k.name
 
 
 class Anchor:
@@ -311,9 +307,10 @@ class Grammar:
                 c = tb[line_no][i]
 
                 # Ignore whitespace
-                if c in (" ", "\r", "\t"):
-                    result.append(GrammarMatch(start=i, end=i + 1, matched_class=TokenTypes.WHITESPACE, line=line_no))
-                    i += 1
+                if c in " \r\t":
+                    ws_m = _WS.match(tb[line_no], i)
+                    result.append(GrammarMatch(start=i, end=ws_m.end(), matched_class=TokenTypes.WHITESPACE, line=line_no))
+                    i = ws_m.end()
                     continue
 
                 found = False
@@ -404,9 +401,10 @@ class Grammar:
                 c = tb[line_no][i]
 
                 # Ignore whitespace
-                if c in (" ", "\r", "\t"):
-                    result.append(GrammarMatch(start=i, end=i + 1, matched_class=TokenTypes.WHITESPACE, line=line_no))
-                    i += 1
+                if c in " \r\t":
+                    ws_m = _WS.match(tb[line_no], i)
+                    result.append(GrammarMatch(start=i, end=ws_m.end(), matched_class=TokenTypes.WHITESPACE, line=line_no))
+                    i = ws_m.end()
                     continue
 
                 found = False
@@ -733,6 +731,11 @@ class TUICSV(TUI):
         self.dir = path
         self.file = None
         self.token = []
+
+        def dir_entry_sort(k: os.DirEntry[str]):
+            if k.is_dir():
+                return "0" + k.name
+            return "1" + k.name
 
         exclusion = [".git"]  # not sure if we want this
         self.ftree = os.scandir(self.dir)
