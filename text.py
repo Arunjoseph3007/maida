@@ -937,6 +937,19 @@ class TUICSV(TUI):
         with self.error_logging("editor"):
             line_no_space = len(str(self.nlines))
 
+            if self.clicking(box):
+                mx, my = self.mouse.pos
+                my -= box.y
+                my += self.scroll - 1
+                my = min(my, self.nlines - 1)
+                mx -= box.x
+                mx -= line_no_space + 2
+                mx = min(mx, len(self.lines[my]))
+                self.tcursor.start.cy = my
+                self.tcursor.start.cx = mx
+                self.tcursor.end.cy = my
+                self.tcursor.end.cx = mx
+
             cx, cy = self.tcursor.end.pair()
             cx = min(cx, len(self.cline))
             cy = cy - self.scroll
@@ -1030,6 +1043,7 @@ class TUICSV(TUI):
             with self.error_logging("diag"), self.withz(100):
                 diag = box.bottom_right(30, 10)
                 ln = next_line(1)
+                self.clean_box(diag)
                 self.draw_box(diag)
                 self.add_line(f"is sel - {self.tcursor.is_selection()}", diag, next(ln))
                 self.add_line(f"start - {self.tcursor.start}", diag, next(ln))
