@@ -47,7 +47,7 @@ class Anchor:
         self.cursor_regulate(lines)
         if self.cx < len(lines[self.cy]):
             self.cx += 1
-        elif self.cy < len(lines):
+        elif self.cy < len(lines) - 1:
             self.cy += 1
             self.cx = 0
 
@@ -60,6 +60,8 @@ class Anchor:
     def down(self, lines):
         if self.cy < len(lines) - 1:
             self.cy += 1
+        else:
+            self.cx = len(lines[-1])
 
     def __eq__(self, value):
         if type(self) != type(value):
@@ -372,6 +374,99 @@ class Grammar:
 
         return result
 
+    def parse_text_buffer_incremental(
+        self,
+        tb: list[str],
+        loc: int,
+        cur_tokens: List[GrammarMatch] = [],
+    ) -> list[GrammarMatch]:
+        if len(cur_tokens) == 0:
+            return self.parse_text_buffer(tb)
+
+        tok_idx = 0
+        while tok_idx < len(cur_tokens) - 1:
+            tok = cur_tokens[tok_idx]
+            if tok.line >= loc:
+                break
+            tok_idx += 1
+
+        tok_type = cur_tokens[tok_idx].matched_class
+        while tok_idx >= 0 and cur_tokens[tok_idx].matched_class == tok_type:
+            tok_idx -= 1
+
+        line_no = cur_tokens[tok_idx].line
+        xst = cur_tokens[tok_idx].start
+        result = []
+        while line_no < len(tb):
+            i = xst
+            xst = 0
+            while line_no < len(tb) and i < len(tb[line_no]):
+                c = tb[line_no][i]
+
+                # Ignore whitespace
+                if c in (" ", "\r", "\t"):
+                    result.append(GrammarMatch(start=i, end=i + 1, matched_class=TokenTypes.WHITESPACE, line=line_no))
+                    i += 1
+                    continue
+
+                found = False
+                for rule in self.patterns:
+
+                    # Region-based matching
+                    if rule.is_region:
+                        start_m = rule.start_match.match(tb[line_no], i)
+                        if start_m:
+                            found = True
+                            start = i
+                            i = start_m.end()
+
+                            end_m = rule.end_match.search(tb[line_no], i)
+                            if end_m:
+                                # End found on the same line
+                                end = end_m.end()
+                                result.append(GrammarMatch(start=start, end=end, matched_class=rule.name, line=line_no))
+                                i = end
+                            else:
+                                # End not on the same line — span across lines
+                                result.append(
+                                    GrammarMatch(start=start, end=len(tb[line_no]), matched_class=rule.name, line=line_no)
+                                )
+                                line_no += 1
+
+                                while line_no < len(tb):
+                                    end_m = rule.end_match.search(tb[line_no])
+                                    if end_m:
+                                        break
+                                    result.append(
+                                        GrammarMatch(start=0, end=len(tb[line_no]), matched_class=rule.name, line=line_no)
+                                    )
+                                    line_no += 1
+
+                                if line_no < len(tb):
+                                    end = end_m.end()
+                                    result.append(GrammarMatch(start=0, end=end, matched_class=rule.name, line=line_no))
+                                    i = end
+
+                            break
+
+                    # Token-based matching
+                    else:
+                        match = rule.start_match.match(tb[line_no], i)
+                        if match:
+                            found = True
+                            end = match.end()
+                            result.append(GrammarMatch(start=i, end=end, matched_class=rule.name, line=line_no))
+                            i = end
+                            break
+
+                if not found:
+                    result.append(GrammarMatch(start=i, end=i + 1, matched_class=TokenTypes.NONE, line=line_no))
+                    i += 1
+
+            line_no += 1
+
+        return cur_tokens[:tok_idx] + result
+
 
 none_grammar = Grammar("none")
 none_grammar.add_rule(TokenTypes.PUNCTUATION, r".*")
@@ -665,13 +760,14 @@ class TUICSV(TUI):
         try:
             with open(self.file) as f:
                 self.lines = f.read().splitlines()
-            self.tokenize()
+            self.token = []
+            self.tokenize(0)
         except Exception:
             self.lwarn(f"Error when reading file {path}, File might be binary")
 
-    def tokenize(self):
+    def tokenize(self, lno):
         with self.timeit("tokenize"):
-            self.token = self.grammar.parse_text_buffer(self.lines)
+            self.token = self.grammar.parse_text_buffer_incremental(self.lines, lno, self.token)
 
     @property
     def filtered_commands(self):
@@ -727,7 +823,7 @@ class TUICSV(TUI):
         self.old_lines.clear()
 
         self.undo_stack = self.undo_stack[-MAX_UNDO_HISTORY_SIZE:]
-        self.tokenize()
+        self.tokenize(self.undo_stack[-1].start)
 
     @contextmanager
     def transaction(self):
@@ -744,7 +840,7 @@ class TUICSV(TUI):
 
         ed.undo(self.lines)
         self.tcursor = ed.start_cursor
-        self.tokenize()
+        self.tokenize(ed.start)
 
     def redo(self):
         if len(self.redo_stack) == 0:
@@ -755,7 +851,7 @@ class TUICSV(TUI):
 
         ed.redo(self.lines)
         self.tcursor = ed.end_cursor
-        self.tokenize()
+        self.tokenize(ed.start)
 
     def backspace(self):
         self.cursor_regulate()
