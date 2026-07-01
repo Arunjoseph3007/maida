@@ -1,3 +1,5 @@
+#!/usr/bin/python3
+
 from maida import *
 from dataclasses import dataclass
 from typing import List, Any
@@ -9,6 +11,7 @@ import pathlib
 import re
 import os
 import sys
+import time
 
 Buffer = List[str]
 
@@ -244,32 +247,32 @@ Histroy = List[Edit]
 MAX_UNDO_HISTORY_SIZE = 100
 
 
-class TokenTypes(enum.StrEnum):
-    WHITESPACE = enum.auto()
-    COMMENT = enum.auto()
-    CONTROL = enum.auto()
-    DECLARATION = enum.auto()
-    CONTEXT = enum.auto()
-    LITERAL = enum.auto()
-    STRING = enum.auto()
-    NUMERIC = enum.auto()
-    OPERATOR = enum.auto()
-    VARIABLE = enum.auto()
-    PUNCTUATION = enum.auto()
-    NONE = enum.auto()
+class TokenTypes(enum.Enum):
+    WHITESPACE = "whitespace"
+    COMMENT = "comment"
+    CONTROL = "control"
+    DECLARATION = "declaration"
+    CONTEXT = "context"
+    LITERAL = "literal"
+    STRING = "string"
+    NUMERIC = "numeric"
+    OPERATOR = "operator"
+    VARIABLE = "variable"
+    PUNCTUATION = "punctuation"
+    NONE = "none"
 
 
 @dataclass
 class GrammarRule:
     name: TokenTypes
-    start_match: str
-    end_match: str | None = None
+    start_match: re.Pattern
+    end_match: re.Pattern | None = None
 
-    def is_region_based(self):
-        return self.end_match is not None
+    def __post_init__(self):
+        self.is_region: bool = self.end_match is not None
 
 
-@dataclass
+@dataclass(slots=True)
 class GrammarMatch:
     start: int
     end: int
@@ -288,7 +291,13 @@ class Grammar:
         self.supported_extentions = exts
 
     def add_rule(self, name, start_match, end_match=None):
-        self.patterns.append(GrammarRule(name, start_match, end_match))
+        self.patterns.append(
+            GrammarRule(
+                name,
+                re.compile(start_match),
+                re.compile(end_match) if end_match else None,
+            )
+        )
 
     def parse_text_buffer(self, tb: list[str]) -> list[GrammarMatch]:
         result = []
@@ -309,17 +318,17 @@ class Grammar:
                 for rule in self.patterns:
 
                     # Region-based matching
-                    if rule.is_region_based():
-                        start_m = re.match(rule.start_match, tb[line_no][i:])
+                    if rule.is_region:
+                        start_m = rule.start_match.match(tb[line_no], i)
                         if start_m:
                             found = True
                             start = i
-                            i += len(start_m.group(0))
+                            i = start_m.end()
 
-                            end_m = re.search(rule.end_match, tb[line_no][i:])
+                            end_m = rule.end_match.search(tb[line_no], i)
                             if end_m:
                                 # End found on the same line
-                                end = i + end_m.end()
+                                end = end_m.end()
                                 result.append(GrammarMatch(start=start, end=end, matched_class=rule.name, line=line_no))
                                 i = end
                             else:
@@ -330,7 +339,7 @@ class Grammar:
                                 line_no += 1
 
                                 while line_no < len(tb):
-                                    end_m = re.search(rule.end_match, tb[line_no])
+                                    end_m = rule.end_match.search(tb[line_no])
                                     if end_m:
                                         break
                                     result.append(
@@ -347,10 +356,10 @@ class Grammar:
 
                     # Token-based matching
                     else:
-                        match = re.match(rule.start_match, tb[line_no][i:])
+                        match = rule.start_match.match(tb[line_no], i)
                         if match:
                             found = True
-                            end = i + len(match.group(0))
+                            end = match.end()
                             result.append(GrammarMatch(start=i, end=end, matched_class=rule.name, line=line_no))
                             i = end
                             break
@@ -797,7 +806,14 @@ class TUICSV(TUI):
     def render(self):
         ftree_box, box = self.box.left(30)
         self.draw_box(ftree_box)
-        self.draw_box(box)
+        t = time.time()
+
+        def osc(f):
+            r = math.sin(t / f) / 2 + 0.5  # normalize to 0-1
+            return math.floor(r * 100 + 50)
+
+        beffect = rgb(osc(0.9), osc(0.2), osc(2))
+        self.draw_box(box, effect=beffect)
         self.box_height = box.pad(1).h
 
         # File tree
